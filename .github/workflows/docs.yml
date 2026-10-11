@@ -62,7 +62,7 @@ jobs:
       # about either. README.pt-BR.md is named out rather than excluded in
       # _typos.toml, because a path given on the command line is checked whether
       # it is excluded or not. Add a new root page here.
-      - uses: crate-ci/typos@v1.50.3
+      - uses: crate-ci/typos@v1.51.1
         with:
           files: "README.md CHANGELOG.md CONTRIBUTING.md CODE_OF_CONDUCT.md SECURITY.md docs .github/ISSUE_TEMPLATE .github/pull_request_template.md plugin plugin-desktop"
 
