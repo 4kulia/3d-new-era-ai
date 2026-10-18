@@ -52,4 +52,4 @@ newera-mcp.workspace = true
 workspace = true
 
 [dev-dependencies]
-egui_kittest = { version = "0.36.2", features = ["eframe", "wgpu", "snapshot"] }
+egui_kittest = { version = "0.37.0", features = ["eframe", "wgpu", "snapshot"] }
