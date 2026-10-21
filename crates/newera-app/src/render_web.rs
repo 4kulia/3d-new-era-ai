@@ -14,11 +14,23 @@ pub(crate) fn budget() -> crate::render_job::BrowserBudget {
     )
 }
 
+/// Inside a worker the size was already fitted where the request entered:
+/// anything still over the budget is refused, never cut again.
 fn bound_request(
     args: &mut serde_json::Value,
     budget: crate::render_job::BrowserBudget,
-) -> Result<Option<crate::render_job::Reduced>, String> {
-    crate::render_job::clamp_request(args, budget)
+) -> Result<(), String> {
+    let mut fitted = args.clone();
+    match crate::render_job::clamp_request(&mut fitted, budget)? {
+        None => {
+            *args = fitted;
+            Ok(())
+        }
+        Some(_) => Err(format!(
+            "Image size exceeds this device's limit of {} pixels per image.",
+            budget.pixels
+        )),
+    }
 }
 
 pub(crate) struct Worker {
@@ -325,7 +337,7 @@ pub(crate) async fn mcp(
         )
     };
     let mut request = request;
-    let reduced = bound_request(&mut request, budget())?;
+    let reduced = crate::render_job::clamp_request(&mut request, budget())?;
     let _worker = Worker::start(request, paths, report.clone(), result.clone(), ctx.clone())?;
     MCP_REPORT.with(|slot| *slot.borrow_mut() = Some(report.clone()));
     ctx.request_repaint();
