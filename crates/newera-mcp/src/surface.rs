@@ -215,7 +215,8 @@ pub fn instructions(transport: Transport) -> String {
             "Home design editor (3D New Era AI), acting for the signed-in account. When the \
              person has the editor open at 3dneweraai.com/app and signed in, calls reach it and \
              every change appears there; otherwise they work on the account's active project in \
-             the cloud, kept after every change (projects lists them)."
+             the cloud, kept after every change (projects lists them). Renders always run here, \
+             on the active project, after the open editor saves its changes."
         }
     };
     let map: Vec<String> = CATEGORIES

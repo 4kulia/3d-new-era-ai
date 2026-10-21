@@ -3410,3 +3410,361 @@ async fn a_refresh_that_reads_a_price_drops_the_offer_the_shop_no_longer_shows()
     );
     assert_eq!(history(&state).await, before + 1, "one price seen");
 }
+
+/// A fake editor tab on the relay's socket.
+type Tab =
+    tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
+
+/// A tab that opened a room, said hello and was claimed for the account
+/// signed in with `cookie`: from here the account's AI reaches it.
+async fn claimed_tab(base: &str, cookie: &str) -> Tab {
+    let http = client();
+    let opened: Value = http
+        .post(format!("{base}/rooms"))
+        .json(&json!({}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let tab_url = format!(
+        "ws://{}{}",
+        base.trim_start_matches("http://"),
+        opened["tab_path"].as_str().unwrap()
+    );
+    let (mut socket, _) = tokio_tungstenite::connect_async(&tab_url).await.unwrap();
+    socket
+        .send(tokio_tungstenite::tungstenite::Message::text(
+            json!({"type": "hello", "tools": [], "resources": []}).to_string(),
+        ))
+        .await
+        .unwrap();
+    let claimed = http
+        .post(format!("{base}/account/claim"))
+        .header("cookie", cookie)
+        .header("origin", SITE)
+        .json(&json!({"room": opened["room"], "tab_key": opened["tab_key"]}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(claimed.status(), 200);
+    socket
+}
+
+/// The next message the service sends the tab, as JSON.
+async fn to_tab(socket: &mut Tab) -> Value {
+    loop {
+        let message = tokio::time::timeout(std::time::Duration::from_secs(10), socket.next())
+            .await
+            .expect("a message for the tab within 10 s")
+            .unwrap()
+            .unwrap();
+        if let tokio_tungstenite::tungstenite::Message::Text(text) = message {
+            return serde_json::from_str(&text).unwrap();
+        }
+    }
+}
+
+/// Nothing more reaches the tab for a while.
+async fn tab_left_alone(socket: &mut Tab) {
+    let quiet = std::time::Duration::from_millis(400);
+    loop {
+        match tokio::time::timeout(quiet, socket.next()).await {
+            Err(_) => return,
+            Ok(Some(Ok(tokio_tungstenite::tungstenite::Message::Text(text)))) => {
+                panic!("the tab was sent {text}");
+            }
+            Ok(_) => {}
+        }
+    }
+}
+
+/// The tab goes away, and the account's room with it.
+async fn hang_up(state: &AppState, mut socket: Tab, email: &str) {
+    socket.close(None).await.unwrap();
+    let account: String =
+        sqlx::query_scalar("select id from accounts where lower(email) = lower($1)")
+            .bind(email)
+            .fetch_one(&state.db)
+            .await
+            .unwrap();
+    for _ in 0..50 {
+        if state.rooms.owned_by(&account).is_none() {
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    panic!("the room outlived its tab by 5 s");
+}
+
+async fn answer_tab(socket: &mut Tab, reply: Value) {
+    socket
+        .send(tokio_tungstenite::tungstenite::Message::text(
+            reply.to_string(),
+        ))
+        .await
+        .unwrap();
+}
+
+async fn render(base: &str, access: &str) -> Value {
+    tool(base, access, "render_plan", json!({"w": 64, "h": 64})).await
+}
+
+/// A render asked for while a tab holds the room, the tab answering its
+/// flush with `reply` (`None`: never). Answers the render, after checking
+/// the tab was asked to flush and given nothing else.
+async fn render_with_tab(
+    base: &str,
+    access: &str,
+    socket: &mut Tab,
+    reply: Option<Value>,
+) -> Value {
+    let rendering = tokio::spawn({
+        let (base, access) = (base.to_owned(), access.to_owned());
+        async move { render(&base, &access).await }
+    });
+    let asked = to_tab(socket).await;
+    assert_eq!(asked["type"], "flush", "{asked}");
+    if let Some(mut reply) = reply {
+        reply["id"] = asked["id"].clone();
+        answer_tab(socket, reply).await;
+    }
+    let answer = rendering.await.unwrap();
+    tab_left_alone(socket).await;
+    answer
+}
+
+fn png(answer: &Value) -> Value {
+    assert_eq!(answer["content"][0]["type"], "image", "{answer}");
+    answer["content"][0].clone()
+}
+
+/// The answer with a note after its image, as a tab-less render plus `note`.
+fn with_note(plain: &Value, note: &str) -> Value {
+    let mut noted = plain.clone();
+    noted["content"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"type": "text", "text": note}));
+    noted["structuredContent"]["note"] = json!(note);
+    noted
+}
+
+/// While a tab holds the room, a render is the engine's: the tab is asked
+/// only to save, and the answer is the one a render without a tab gets.
+#[tokio::test]
+async fn a_render_runs_on_the_server_while_a_tab_holds_the_room() {
+    let Some((base, state)) = service().await else {
+        return;
+    };
+    let (cookie, access, id) = drawn_project(&base, &state, "flush@example.com").await;
+    let plain = render(&base, &access).await;
+    png(&plain);
+    assert_eq!(
+        plain["structuredContent"],
+        json!({"mimeType": "image/png"}),
+        "{plain}"
+    );
+    let mut socket = claimed_tab(&base, &cookie).await;
+    tab_left_alone(&mut socket).await;
+    for name in ["render_plan", "render_3d", "render_photo"] {
+        let rendering = tokio::spawn({
+            let (base, access) = (base.clone(), access.clone());
+            async move { tool(&base, &access, name, json!({"w": 64, "h": 48})).await }
+        });
+        let asked = to_tab(&mut socket).await;
+        assert_eq!(asked, json!({"type": "flush", "id": asked["id"]}), "{name}");
+        answer_tab(
+            &mut socket,
+            json!({"type": "result", "id": asked["id"], "ok": true, "result": {"project": id, "revision": 1}}),
+        )
+        .await;
+        let answer = rendering.await.unwrap();
+        png(&answer);
+        assert_eq!(
+            answer["content"].as_array().unwrap().len(),
+            1,
+            "{name}: {answer}"
+        );
+        assert!(
+            answer["structuredContent"].get("note").is_none(),
+            "{name}: {answer}"
+        );
+        tab_left_alone(&mut socket).await;
+    }
+    let answer = render_with_tab(
+        &base,
+        &access,
+        &mut socket,
+        Some(json!({"type": "result", "ok": true, "result": {"project": id, "revision": 1}})),
+    )
+    .await;
+    assert_eq!(answer, plain);
+    // Every other tool still goes to the tab.
+    let calling = tokio::spawn({
+        let (base, access) = (base.clone(), access.clone());
+        async move { tool(&base, &access, "home", json!({})).await }
+    });
+    let work = to_tab(&mut socket).await;
+    assert_eq!(work["type"], "call");
+    assert_eq!(work["name"], "home");
+    answer_tab(
+        &mut socket,
+        json!({"type": "result", "id": work["id"], "ok": true, "result": {"content": [{"type": "text", "text": "w1"}]}}),
+    )
+    .await;
+    assert_eq!(calling.await.unwrap()["content"][0]["text"], "w1");
+}
+
+/// The render waits for the tab's save and draws what it kept — through
+/// the tab's own PUT, and through a revision kept by another writer that
+/// the engine's open copy predates.
+#[tokio::test]
+async fn the_render_shows_what_the_tab_saved_on_flush() {
+    let Some((base, state)) = service().await else {
+        return;
+    };
+    let (cookie, access, id) = drawn_project(&base, &state, "flushed@example.com").await;
+    let four_walls = render(&base, &access).await;
+    let mut socket = claimed_tab(&base, &cookie).await;
+    tab_left_alone(&mut socket).await;
+
+    // The tab's pending change goes up only after it is asked, and a moment
+    // later: the render must wait for its answer.
+    let rendering = tokio::spawn({
+        let (base, access) = (base.clone(), access.clone());
+        async move { render(&base, &access).await }
+    });
+    let asked = to_tab(&mut socket).await;
+    assert_eq!(asked["type"], "flush");
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    let saved = put(
+        &base,
+        &id,
+        Some(&cookie),
+        Some(SITE),
+        Some("1"),
+        empty_project(),
+    )
+    .await;
+    assert_eq!(saved.status(), 200);
+    answer_tab(
+        &mut socket,
+        json!({"type": "result", "id": asked["id"], "ok": true, "result": {"project": id, "revision": 2}}),
+    )
+    .await;
+    let after_put = rendering.await.unwrap();
+    tab_left_alone(&mut socket).await;
+    png(&after_put);
+    assert_ne!(
+        png(&after_put),
+        png(&four_walls),
+        "the tab's change is drawn"
+    );
+
+    // Four walls again, through the engine, with no tab: its copy is open
+    // at revision 3.
+    hang_up(&state, socket, "flushed@example.com").await;
+    let redrawn = tool(
+        &base,
+        &access,
+        "create",
+        json!({"walls": [{"pts": [[0, 0], [400, 0], [400, 300], [0, 300]], "closed": true}]}),
+    )
+    .await;
+    assert_eq!(redrawn["isError"], false, "{redrawn}");
+    assert_eq!(stored(&state, &id).await.0, 3);
+    assert_eq!(png(&render(&base, &access).await), png(&four_walls));
+
+    // Another writer keeps the empty project as revision 4 without telling
+    // this process; the tab says revision 4 holds its state.
+    let mut socket = claimed_tab(&base, &cookie).await;
+    tab_left_alone(&mut socket).await;
+    sqlx::query("update projects set data = $1, revision = revision + 1 where id = $2")
+        .bind(empty_project())
+        .bind(&id)
+        .execute(&state.db)
+        .await
+        .unwrap();
+    let after_write = render_with_tab(
+        &base,
+        &access,
+        &mut socket,
+        Some(json!({"type": "result", "ok": true, "result": {"project": id, "revision": 4}})),
+    )
+    .await;
+    assert_eq!(
+        after_write, after_put,
+        "the engine dropped its revision-3 copy for the kept one"
+    );
+}
+
+/// When the tab cannot vouch for what is stored, the stored copy is
+/// rendered all the same, and the agent is told why it may differ from the
+/// screen. A tab that never answers — an editor older than the request —
+/// holds the render up for the bounded wait only.
+#[tokio::test]
+async fn a_render_the_tab_cannot_vouch_for_comes_with_a_note() {
+    let Some((base, state)) = service().await else {
+        return;
+    };
+    let (cookie, access, id) = drawn_project(&base, &state, "unsure@example.com").await;
+    // A second project of the account, open in the tab but not active.
+    let other = secret::id();
+    sqlx::query(
+        "insert into projects (id, account_id, name, data, size)
+         select $1, account_id, 'Varanda', $2, $3 from projects where id = $4",
+    )
+    .bind(&other)
+    .bind(empty_project())
+    .bind(i32::try_from(empty_project().len()).unwrap())
+    .bind(&id)
+    .execute(&state.db)
+    .await
+    .unwrap();
+    let plain = render(&base, &access).await;
+    let mut socket = claimed_tab(&base, &cookie).await;
+    tab_left_alone(&mut socket).await;
+    let missing = "edits made in the tab since may be missing.";
+    let cases = [
+        (
+            Some(json!({"type": "result", "ok": true, "result": {"project": null}})),
+            "The editor tab shows a project that is not saved on the server: this is the active server project, not what the tab shows.".to_owned(),
+        ),
+        (
+            Some(json!({"type": "result", "ok": true, "result": {"project": other, "revision": 1}})),
+            "This render is of the active project, Projeto 1; the editor tab shows another project, Varanda, and its edits are not in it. To render what the tab shows, the person opens Projeto 1 in the editor tab, or closes the tab so that file action=open can make Varanda the active project.".to_owned(),
+        ),
+        (
+            Some(json!({"type": "result", "ok": true, "result": {"project": "not-theirs", "revision": 1}})),
+            "This render is of the active project, Projeto 1; the editor tab shows a project this account does not have (not-theirs), and its edits are not in it. To render what the tab shows, the person opens Projeto 1 in the editor tab.".to_owned(),
+        ),
+        (
+            Some(json!({"type": "result", "ok": true, "result": {"project": id}})),
+            format!("The editor tab did not say which revision it saved: this is the project as last saved, and {missing}"),
+        ),
+        (
+            Some(json!({"type": "result", "ok": false, "error": "the service said 413"})),
+            format!("The editor tab did not confirm it saved its latest edits (the service said 413): this is the project as last saved, and {missing}"),
+        ),
+        (
+            None,
+            format!("The editor tab did not confirm it saved its latest edits (the window took longer than 10 s to answer): this is the project as last saved, and {missing}"),
+        ),
+    ];
+    for (reply, note) in cases {
+        let unanswered = reply.is_none();
+        let started = std::time::Instant::now();
+        let answer = render_with_tab(&base, &access, &mut socket, reply).await;
+        assert_eq!(answer, with_note(&plain, &note));
+        if unanswered {
+            let waited = started.elapsed();
+            assert!(
+                waited >= std::time::Duration::from_secs(10)
+                    && waited < std::time::Duration::from_secs(20),
+                "{waited:?}"
+            );
+        }
+    }
+}

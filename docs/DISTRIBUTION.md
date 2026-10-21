@@ -21,6 +21,7 @@ apart.
  │ `newera`         │        │                                                              │
  └──────────────────┘        │ per-account session router:                                  │
                              │   ├─ the user's editor tab is open → relay → that tab        │
+                             │   │   (renders: the tab saves, then the headless engine)     │
                              │   └─ otherwise → headless engine → cloud project (Postgres)  │
                              │                                                              │
                              │ anonymous link, no account: /r/<room>/<token>/mcp            │
@@ -34,7 +35,9 @@ apart.
   give an AI client a URL of its own.
 - **Hosted:** `crates/newera-cloud` mounts the relay (`crates/newera-relay`) and
   adds accounts, OAuth, cloud projects, a job queue for heavy renders, and
-  billing. It exposes the same tools minus the ones that only make sense on the
+  billing. While the account's tab holds the relay, tool calls reach that tab,
+  except renders: the service asks the tab to save its pending changes, then
+  renders the stored project itself. It exposes the same tools minus the ones that only make sense on the
   user's machine (`feedback`, `plugins`/`run_plugin`, and free file paths, which
   map to the account's own projects and 24-hour download links).
 

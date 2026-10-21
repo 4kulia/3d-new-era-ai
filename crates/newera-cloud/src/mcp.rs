@@ -2,8 +2,9 @@
 //! acts for the account its token belongs to.
 //!
 //! A call goes to that account's tab — the editor at 3dneweraai.com/app,
-//! signed in — through the relay. The handshake, the tool list and the
-//! pages are answered here, so a client can connect before the tab is open.
+//! signed in — through the relay; renders run on the server all the same,
+//! after the tab has saved. The handshake, the tool list and the pages are
+//! answered here, so a client can connect before the tab is open.
 
 use std::time::Duration;
 
@@ -197,8 +198,15 @@ async fn answer(
                 );
             }
             // The person's own editor, when it is open and signed in; the
-            // cloud project otherwise.
-            if !hosted && let Some(room) = app.rooms.owned_by(&account.id) {
+            // cloud project otherwise. A render always runs here, on the
+            // server: the tab saves what it has first.
+            let render = RENDERS.contains(&name);
+            let room = if hosted {
+                None
+            } else {
+                app.rooms.owned_by(&account.id)
+            };
+            if !render && let Some(room) = room {
                 // The tab may run an editor older than this service: its
                 // answer gets its fields here, as the engine's do.
                 let mut answer = newera_relay::answer_in(&app.rooms, &room, message).await;
@@ -207,6 +215,10 @@ async fn answer(
                 }
                 return answer;
             }
+            let note = match room {
+                Some(room) if render => flush(app, &account.id, &room).await,
+                _ => None,
+            };
             let plan = match crate::accounts::plan_of(&app.db, &account.id).await {
                 Ok(plan) => plan,
                 Err(err) => {
@@ -233,6 +245,9 @@ async fn answer(
             {
                 Ok(mut answer) => {
                     newera_mcp::output::structure_json(&mut answer);
+                    if let Some(note) = note {
+                        add_note(&mut answer, &note);
+                    }
                     Some(result(&id, answer))
                 }
                 Err(err) => {
@@ -249,6 +264,122 @@ async fn answer(
             -32601,
             &format!("this server does not do {other}"),
         )),
+    }
+}
+
+/// The tools that render: always run by the engine, never by a tab.
+const RENDERS: [&str; 3] = ["render_plan", "render_3d", "render_photo"];
+
+/// How long a render waits for the tab to save what it has: one upload of
+/// the project, started the moment the tab is asked. A chosen bound, not a
+/// measured upload time; past it the render goes ahead on what is stored.
+const FLUSH_WAIT: Duration = Duration::from_secs(10);
+
+/// Before a render, while the account's tab holds the room: the tab saves
+/// its pending change and says at which revision the project is kept, so the
+/// engine renders what is on the person's screen.
+///
+/// The render goes ahead in every case, on what is stored; what this answers
+/// is the note the agent gets with it when the stored project may not be the
+/// tab's:
+///
+/// - the tab answers with the active project and a revision: the engine's
+///   copy is made at least that revision (`Engine::forget`), no note;
+/// - the tab is bound to another project, or to none (a project only in the
+///   browser): the render is of the active project, and the note names both
+///   and what the person can do (`elsewhere`);
+/// - no answer within `FLUSH_WAIT` (an editor older than the request, a tab
+///   asleep, a slow upload), or the tab could not save: the stored copy is
+///   rendered, and the note says the tab's latest edits may be missing.
+async fn flush(app: &AppState, account: &str, room: &str) -> Option<String> {
+    let answered = newera_relay::flush_in(&app.rooms, room, FLUSH_WAIT).await;
+    let active: Option<String> =
+        match sqlx::query_scalar("select project_id from active_projects where account_id = $1")
+            .bind(account)
+            .fetch_optional(&app.db)
+            .await
+        {
+            Ok(active) => active,
+            Err(err) => {
+                tracing::error!("active project: {err}");
+                None
+            }
+        };
+    let saved = match answered {
+        Ok(saved) => saved,
+        Err(why) => {
+            tracing::warn!("flush before a render: {why}");
+            return Some(format!(
+                "The editor tab did not confirm it saved its latest edits ({why}): this is the project as last saved, and edits made in the tab since may be missing."
+            ));
+        }
+    };
+    let Some(project) = saved["project"].as_str() else {
+        return Some(
+            "The editor tab shows a project that is not saved on the server: this is the active server project, not what the tab shows."
+                .to_owned(),
+        );
+    };
+    if active.as_deref() != Some(project) {
+        return Some(elsewhere(app, account, active.as_deref(), project).await);
+    }
+    let Some(revision) = saved["revision"].as_i64() else {
+        return Some(
+            "The editor tab did not say which revision it saved: this is the project as last saved, and edits made in the tab since may be missing."
+                .to_owned(),
+        );
+    };
+    app.engine.forget(account, project, revision).await;
+    None
+}
+
+/// The note for a render of the active project while the tab shows
+/// `shown`. While the tab holds the room every other tool goes to it, so
+/// `file action=open` cannot switch the active project then: the remedies
+/// named are the ones that work.
+async fn elsewhere(app: &AppState, account: &str, active: Option<&str>, shown: &str) -> String {
+    let name = |id: Option<&str>| {
+        let id = id.map(str::to_owned);
+        async move {
+            let id = id?;
+            sqlx::query_scalar::<_, String>(
+                "select name from projects where id = $1 and account_id = $2",
+            )
+            .bind(&id)
+            .bind(account)
+            .fetch_optional(&app.db)
+            .await
+            .unwrap_or_else(|err| {
+                tracing::error!("project name: {err}");
+                None
+            })
+        }
+    };
+    let active = name(active)
+        .await
+        .unwrap_or_else(|| "the account's active project".to_owned());
+    match name(Some(shown)).await {
+        Some(shown) => format!(
+            "This render is of the active project, {active}; the editor tab shows another project, {shown}, and its edits are not in it. To render what the tab shows, the person opens {active} in the editor tab, or closes the tab so that file action=open can make {shown} the active project."
+        ),
+        None => format!(
+            "This render is of the active project, {active}; the editor tab shows a project this account does not have ({shown}), and its edits are not in it. To render what the tab shows, the person opens {active} in the editor tab."
+        ),
+    }
+}
+
+/// Tells the agent something about an answer it got, beside it: a line of
+/// text after the content, and `note` among its fields — the shape of the
+/// answer stays what it was.
+fn add_note(answer: &mut Value, note: &str) {
+    if let Some(content) = answer.get_mut("content").and_then(Value::as_array_mut) {
+        content.push(json!({"type": "text", "text": note}));
+    }
+    if let Some(fields) = answer
+        .get_mut("structuredContent")
+        .and_then(Value::as_object_mut)
+    {
+        fields.insert("note".to_owned(), json!(note));
     }
 }
 

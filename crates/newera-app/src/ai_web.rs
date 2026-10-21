@@ -639,6 +639,28 @@ fn hold(
                         ctx.request_repaint();
                     });
                 }
+                // The service renders next, from what is stored: what this
+                // tab has not saved yet goes now.
+                Some("flush") => {
+                    let id = message
+                        .get("id")
+                        .cloned()
+                        .unwrap_or(serde_json::Value::Null);
+                    let (document, socket, ctx, state) =
+                        (document.clone(), socket.clone(), ctx.clone(), state.clone());
+                    wasm_bindgen_futures::spawn_local(async move {
+                        let reply = match flush(&document, &state).await {
+                            Ok(result) => serde_json::json!({
+                                "type": "result", "id": id, "ok": true, "result": result
+                            }),
+                            Err(why) => serde_json::json!({
+                                "type": "result", "id": id, "ok": false, "error": why
+                            }),
+                        };
+                        let _ = socket.send_with_str(&reply.to_string());
+                        ctx.request_repaint();
+                    });
+                }
                 _ => {}
             }
         })
@@ -764,34 +786,123 @@ pub(crate) fn autosave(
     drop(held);
     let (document, ctx, state) = (document.clone(), ctx.clone(), state.clone());
     wasm_bindgen_futures::spawn_local(async move {
-        let answer = put_project(&url, from, bytes).await;
-        let stale = {
-            let mut held = state.borrow_mut();
-            let Some(cloud) = held.cloud.as_mut().filter(|c| c.serial == serial) else {
-                return;
-            };
-            match answer {
-                Ok((200, Some(revision), _)) => {
-                    cloud.saver.saved(revision);
-                    cloud.warning = None;
-                    None
-                }
-                Ok((409, _, _)) => {
-                    cloud.saver.conflicted();
-                    Some(cloud.name.clone())
-                }
-                Ok((_, _, why)) | Err(why) => {
-                    cloud.said = Some(refused(cloud, js_sys::Date::now(), &why));
-                    None
-                }
-            }
-        };
-        if let Some(name) = stale {
-            keep_and_reload(&document, &state, serial, &url, &name).await;
-        }
+        let _ = send_save(&document, &state, serial, &url, from, bytes).await;
         ctx.request_repaint();
     });
     None
+}
+
+/// Sends the document's `bytes` on the service revision `from` and books
+/// how it went: kept, refused as stale (the backup and the reload follow), or
+/// failed (the status bar says so). The service revision it was kept as, or
+/// why it was not.
+async fn send_save(
+    document: &SharedDocument,
+    state: &Shared,
+    serial: u32,
+    url: &str,
+    from: i64,
+    bytes: Vec<u8>,
+) -> Result<i64, String> {
+    let answer = put_project(url, from, bytes).await;
+    let stale = {
+        let mut held = state.borrow_mut();
+        let Some(cloud) = held.cloud.as_mut().filter(|c| c.serial == serial) else {
+            return Err("the tab opened another project meanwhile".to_owned());
+        };
+        match answer {
+            Ok((200, Some(revision), _)) => {
+                cloud.saver.saved(revision);
+                cloud.warning = None;
+                return Ok(revision);
+            }
+            Ok((409, _, _)) => {
+                cloud.saver.conflicted();
+                cloud.name.clone()
+            }
+            Ok((_, _, why)) | Err(why) => {
+                cloud.said = Some(refused(cloud, js_sys::Date::now(), &why));
+                return Err(why);
+            }
+        }
+    };
+    keep_and_reload(document, state, serial, url, &stale).await;
+    Err("the project changed on the server since this tab loaded it".to_owned())
+}
+
+/// How long a flush may take, waits and its own upload together: past the
+/// service's own wait (`newera-cloud` `FLUSH_WAIT`, 10 s), which has given up
+/// by then.
+const FLUSH_MS: f64 = 15_000.0;
+
+/// Saves the cloud project now, for a render the service runs next (the
+/// relay's `flush`): after the save already on its way, the pending change is
+/// sent once, at once — a person still editing does not start more uploads.
+/// Answers what `autosave::flush_answer` words.
+///
+/// Runs from the socket, not from a frame: a tab in the background draws no
+/// frames, and its pending change is exactly what has to go.
+async fn flush(document: &SharedDocument, state: &Shared) -> Result<serde_json::Value, String> {
+    let started = js_sys::Date::now();
+    loop {
+        if js_sys::Date::now() - started > FLUSH_MS {
+            return Err("this tab's save took too long".to_owned());
+        }
+        let (step, url, serial) = {
+            let mut held = state.borrow_mut();
+            let holding = held.claimed && matches!(held.link, Link::On { .. });
+            let Some(cloud) = held.cloud.as_mut() else {
+                return Ok(crate::autosave::flush_answer(None, 0));
+            };
+            if !holding {
+                return Err("this tab is not saving to the account".to_owned());
+            }
+            let step = cloud.saver.flush(document.read().revision());
+            (step, cloud.url.clone(), cloud.serial)
+        };
+        match step {
+            crate::autosave::Flush::Kept(revision) => {
+                return Ok(crate::autosave::flush_answer(Some(&url), revision));
+            }
+            crate::autosave::Flush::Stuck => {
+                return Err(
+                    "the project changed on the server and this tab is opening that copy"
+                        .to_owned(),
+                );
+            }
+            crate::autosave::Flush::Wait => pause(100).await,
+            crate::autosave::Flush::Send(from) => {
+                let bytes = newera_core::to_bundle_bytes(&document.read());
+                let bytes = match bytes {
+                    Ok(bytes) => bytes,
+                    Err(why) => {
+                        let why = why.to_string();
+                        if let Some(cloud) = state
+                            .borrow_mut()
+                            .cloud
+                            .as_mut()
+                            .filter(|c| c.serial == serial)
+                        {
+                            cloud.said = Some(refused(cloud, js_sys::Date::now(), &why));
+                        }
+                        return Err(why);
+                    }
+                };
+                let revision = send_save(document, state, serial, &url, from, bytes).await?;
+                return Ok(crate::autosave::flush_answer(Some(&url), revision));
+            }
+        }
+    }
+}
+
+/// Waits `ms` milliseconds in the browser's event loop.
+async fn pause(ms: i32) {
+    let timer = js_sys::Promise::new(&mut |resolve, _| {
+        if let Some(window) = web_sys::window() {
+            let _ = window.set_timeout_with_callback_and_timeout_and_arguments_0(&resolve, ms);
+        }
+    });
+    let _ = wasm_bindgen_futures::JsFuture::from(timer).await;
 }
 
 /// How long the status bar goes without repeating that changes are not

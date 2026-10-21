@@ -97,6 +97,13 @@ enum ToTab {
         name: String,
         version: Option<String>,
     },
+    /// Save the cloud project now — the pending change at once, after the
+    /// save already on its way — and answer with a `result` under `id`
+    /// carrying `{"project", "revision"}`: the project it is
+    /// bound to and the service revision that holds its latest state, or no
+    /// project when it is bound to none. An editor older than this message
+    /// ignores it and never answers; whoever asks waits a bounded time.
+    Flush { id: u64 },
 }
 
 #[derive(Debug, Deserialize)]
@@ -802,10 +809,50 @@ Units: cm. Plan axes: x right, y down. Everything you change appears on their \
 screen as you do it and can be undone with Ctrl+Z. The project lives in that \
 tab: it is not saved anywhere here, and closing the tab ends the session.";
 
+/// Asks an account's tab to save its cloud project now, and waits up to
+/// `within` for the answer (`ToTab::Flush`): `{"project": id or null,
+/// "revision": n}` as the tab says it. `Err` when the tab is not connected,
+/// refused, went away, or did not answer in time — an editor older than this
+/// message never does.
+///
+/// # Errors
+///
+/// When the tab gave no answer to act on, and why.
+///
+/// # Panics
+///
+/// If another thread panicked while holding the rooms.
+pub async fn flush_in(rooms: &Rooms, room: &str, within: Duration) -> Result<Value, String> {
+    ask_tab(rooms, room, None, within, |id| ToTab::Flush { id }).await
+}
+
 /// Sends one call down to the tab and waits for its answer.
 async fn hand_to_tab(rooms: &Rooms, room: &str, name: &str, args: Value) -> Result<Value, String> {
+    let call = name.to_owned();
+    ask_tab(rooms, room, Some(name), TOOL_TIMEOUT, move |id| {
+        ToTab::Call {
+            id,
+            name: call,
+            args,
+        }
+    })
+    .await
+}
+
+/// Sends the tab one request that it answers with a `result` under the id
+/// given to `request`, and waits up to `within` for it. `tool` is the tool a
+/// call runs, checked against what the tab offers. A request not answered in
+/// time stops waiting for good: it holds no slot of the room's in-flight
+/// calls after that.
+async fn ask_tab(
+    rooms: &Rooms,
+    room: &str,
+    tool: Option<&str>,
+    within: Duration,
+    request: impl FnOnce(u64) -> ToTab,
+) -> Result<Value, String> {
     let (tx, rx) = oneshot::channel();
-    {
+    let id = {
         let mut held = rooms.0.lock().expect("rooms");
         let entry = held
             .rooms
@@ -824,7 +871,8 @@ async fn hand_to_tab(rooms: &Rooms, room: &str, name: &str, args: Value) -> Resu
         };
         // A tab keeps the editor it loaded: one older than the service that
         // listed a tool does not have it, and says so better than `unknown`.
-        if let Some(offered) = entry.tools.as_array()
+        if let Some(name) = tool
+            && let Some(offered) = entry.tools.as_array()
             && !offered.is_empty()
             && !offered.iter().any(|tool| tool["name"] == name)
         {
@@ -835,21 +883,24 @@ async fn hand_to_tab(rooms: &Rooms, room: &str, name: &str, args: Value) -> Resu
         entry.next_call += 1;
         let id = entry.next_call;
         entry.waiting.insert(id, tx);
-        outbox
-            .send(ToTab::Call {
-                id,
-                name: name.to_owned(),
-                args,
-            })
-            .map_err(|_| "the editor's tab went away".to_owned())?;
-    }
-    match tokio::time::timeout(TOOL_TIMEOUT, rx).await {
+        if outbox.send(request(id)).is_err() {
+            entry.waiting.remove(&id);
+            return Err("the editor's tab went away".to_owned());
+        }
+        id
+    };
+    match tokio::time::timeout(within, rx).await {
         Ok(Ok(result)) => result,
         Ok(Err(_)) => Err("the editor's tab went away".to_owned()),
-        Err(_) => Err(format!(
-            "the window took longer than {} s to answer",
-            TOOL_TIMEOUT.as_secs()
-        )),
+        Err(_) => {
+            if let Some(entry) = rooms.0.lock().expect("rooms").rooms.get_mut(room) {
+                entry.waiting.remove(&id);
+            }
+            Err(format!(
+                "the window took longer than {} s to answer",
+                within.as_secs_f64()
+            ))
+        }
     }
 }
 
@@ -1151,6 +1202,85 @@ mod tests {
             !from_the_editor(Some("https://editor.example.evil.example"), &own),
             "and only that origin, not a name that starts the same"
         );
+    }
+
+    /// A room with a tab on the end of `outbox`, as a connected socket has it.
+    fn connected(rooms: &Rooms) -> (String, mpsc::UnboundedReceiver<ToTab>) {
+        let (id, _tab, _token) = rooms.open("test", None).expect("a room");
+        let (outbox, inbox) = mpsc::unbounded_channel();
+        rooms.0.lock().unwrap().rooms.get_mut(&id).unwrap().outbox = Some(outbox);
+        (id, inbox)
+    }
+
+    fn in_flight(rooms: &Rooms, room: &str) -> usize {
+        rooms.0.lock().unwrap().rooms[room].waiting.len()
+    }
+
+    /// The tab is asked to flush in its own message, and its answer is what
+    /// the asker gets back.
+    #[tokio::test]
+    async fn a_flush_is_asked_and_answered() {
+        let rooms = Rooms::default();
+        let (room, mut inbox) = connected(&rooms);
+        let asking = tokio::spawn({
+            let (rooms, room) = (rooms.clone(), room.clone());
+            async move { flush_in(&rooms, &room, Duration::from_secs(5)).await }
+        });
+        let asked = inbox.recv().await.expect("the request");
+        assert_eq!(
+            serde_json::to_value(&asked).unwrap(),
+            json!({"type": "flush", "id": 1})
+        );
+        let answer = rooms
+            .0
+            .lock()
+            .unwrap()
+            .rooms
+            .get_mut(&room)
+            .unwrap()
+            .waiting
+            .remove(&1)
+            .expect("waiting under its id");
+        answer
+            .send(Ok(json!({"project": "p1", "revision": 4})))
+            .unwrap();
+        assert_eq!(
+            asking.await.unwrap(),
+            Ok(json!({"project": "p1", "revision": 4}))
+        );
+    }
+
+    /// A tab that never answers — an editor older than the message — costs
+    /// the asker the bounded wait and nothing more: no slot stays taken, so
+    /// later calls are not refused as too many in the air.
+    #[tokio::test]
+    async fn an_unanswered_flush_times_out_and_frees_its_slot() {
+        let rooms = Rooms::default();
+        let (room, _inbox) = connected(&rooms);
+        for _ in 0..=MAX_IN_FLIGHT {
+            let answer = flush_in(&rooms, &room, Duration::from_millis(10)).await;
+            assert_eq!(
+                answer,
+                Err("the window took longer than 0.01 s to answer".to_owned())
+            );
+            assert_eq!(in_flight(&rooms, &room), 0);
+        }
+    }
+
+    /// Without a connected tab, a flush fails at once.
+    #[tokio::test]
+    async fn a_flush_without_a_tab_fails_at_once() {
+        let rooms = Rooms::default();
+        let (room, _tab, _token) = rooms.open("test", None).expect("a room");
+        let answer = flush_in(&rooms, &room, Duration::from_secs(60)).await;
+        assert_eq!(
+            answer,
+            Err(
+                "the editor's tab is not connected — open the project again in the browser"
+                    .to_owned()
+            )
+        );
+        assert_eq!(in_flight(&rooms, &room), 0);
     }
 
     /// A notification is not answered at all, which is what the protocol says.
