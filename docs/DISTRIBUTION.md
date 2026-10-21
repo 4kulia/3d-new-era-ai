@@ -32,7 +32,16 @@ apart.
   (stdio) attaches to the open window, or runs headless when there is none.
 - **Browser editor:** `crates/newera-editor-web`, served at
   [3dneweraai.com/app](https://3dneweraai.com/app/). A tab can join the relay and
-  give an AI client a URL of its own.
+  give an AI client a URL of its own. Opened for a hosted service (`?relay=`
+  names it), its File menu lists the account's cloud projects
+  (`GET /account/projects`), opens one as a `?project=` link does — saved back
+  to the service after each change — and starts new ones there
+  (`POST /account/projects`, within the plan as the AI's `file action=new`).
+  A tab showing one of the account's projects — by link, from the server or
+  new — makes it the account's active project
+  (`POST /account/projects/{id}/active`) when it opens it and each time it
+  claims the account's room, so the AI and the renders work on the project on
+  screen.
 - **Hosted:** `crates/newera-cloud` mounts the relay (`crates/newera-relay`) and
   adds accounts, OAuth, cloud projects, a job queue for heavy renders, and
   billing. While the account's tab holds the relay, tool calls reach that tab,

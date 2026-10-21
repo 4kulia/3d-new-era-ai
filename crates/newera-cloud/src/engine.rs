@@ -131,6 +131,123 @@ pub fn no_room(plan: &Plan, total: i64) -> Option<String> {
     })
 }
 
+/// One of an account's projects, as its lists show it.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct Listed {
+    pub id: String,
+    pub name: String,
+    /// Bytes stored.
+    pub size: i32,
+    /// When it last changed, in seconds since the epoch.
+    pub updated_at: i64,
+    /// Whether it is the project the account's AI works on with no tab open.
+    pub active: bool,
+}
+
+/// The account's projects, the last changed first.
+///
+/// # Errors
+///
+/// When the database fails.
+pub async fn projects(db: &PgPool, account: &str) -> sqlx::Result<Vec<Listed>> {
+    let rows: Vec<(String, String, i32, i64, bool)> = sqlx::query_as(
+        "select p.id, p.name, p.size, extract(epoch from p.updated_at)::bigint,
+                coalesce(a.project_id = p.id, false)
+         from projects p left join active_projects a on a.account_id = p.account_id
+         where p.account_id = $1 order by p.updated_at desc, p.id",
+    )
+    .bind(account)
+    .fetch_all(db)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(|(id, name, size, updated_at, active)| Listed {
+            id,
+            name,
+            size,
+            updated_at,
+            active,
+        })
+        .collect())
+}
+
+/// How making a project went.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Made {
+    /// Made, empty, at revision 0, under this id and name.
+    New { id: String, name: String },
+    /// The plan keeps this many projects, and the account has them all.
+    TooMany(i64),
+    /// The plan has no room for even an empty one; this says why.
+    Full(String),
+    /// The account has a project of this name already.
+    Taken(String),
+}
+
+/// Makes an empty project for the account, named `name` as cleaned (a
+/// numbered default when that leaves nothing), if the plan keeps one more
+/// and has room for it. Every new project goes through here: the AI's
+/// `file action=new`, and the editor's.
+///
+/// # Errors
+///
+/// When the database fails.
+pub async fn make(
+    db: &PgPool,
+    account: &str,
+    plan: &Plan,
+    name: Option<&str>,
+) -> sqlx::Result<Made> {
+    let (count, used): (i64, i64) = sqlx::query_as(
+        "select count(*), coalesce(sum(size), 0)::bigint from projects where account_id = $1",
+    )
+    .bind(account)
+    .fetch_one(db)
+    .await?;
+    let most = plan.limits["projects"].as_i64().unwrap_or(0);
+    if count >= most {
+        return Ok(Made::TooMany(most));
+    }
+    let data = newera_core::to_project_bytes(&Document::default());
+    let size = i64::try_from(data.len()).unwrap_or(i64::MAX);
+    if let Some(why) = no_room(plan, used.saturating_add(size)) {
+        return Ok(Made::Full(why));
+    }
+    let name = match name.map(clean_name).filter(|n| !n.is_empty()) {
+        Some(name) => name,
+        None => format!("Projeto {}", count + 1),
+    };
+    let id = secret::id();
+    let made = sqlx::query(
+        "insert into projects (id, account_id, name, data, size) values ($1, $2, $3, $4, $5)",
+    )
+    .bind(&id)
+    .bind(account)
+    .bind(&name)
+    .bind(&data)
+    .bind(i32::try_from(data.len()).unwrap_or(i32::MAX))
+    .execute(db)
+    .await;
+    match made {
+        Ok(_) => Ok(Made::New { id, name }),
+        Err(sqlx::Error::Database(e)) if e.is_unique_violation() => Ok(Made::Taken(name)),
+        Err(e) => Err(e),
+    }
+}
+
+/// Where a cloud project opens in the editor: the editor at `editor_url`,
+/// given the project's address at the service `public_url` and the service
+/// itself, so the tab saves it back there.
+#[must_use]
+pub fn editor_link(editor_url: &str, public_url: &str, project: &str) -> String {
+    let file = format!("{public_url}/account/projects/{project}");
+    format!(
+        "{editor_url}?project={}&relay={}",
+        crate::login::url_encode(&file),
+        crate::login::url_encode(public_url)
+    )
+}
+
 /// The engine: the projects open now, and the gate for heavy work.
 #[derive(Debug)]
 pub struct Engine {
@@ -326,12 +443,8 @@ impl Engine {
         // "Open in the editor" opens this very project there.
         if name == "show_plan" && result["isError"] != true {
             let mut result = result;
-            let file = format!("{public_url}/account/projects/{}", loaded.project);
-            result["structuredContent"]["editor"] = json!(format!(
-                "{editor_url}?project={}&relay={}",
-                crate::login::url_encode(&file),
-                crate::login::url_encode(public_url)
-            ));
+            result["structuredContent"]["editor"] =
+                json!(editor_link(editor_url, public_url, &loaded.project));
             return Ok(result);
         }
         if let Some((target, file_name, ext)) = export
@@ -395,18 +508,10 @@ impl Engine {
 
     /// The account's projects, and how much of the plan they use.
     async fn list(&self, db: &PgPool, account: &str, plan: &Plan) -> anyhow::Result<Value> {
-        let rows: Vec<(String, String, i32, i64, bool)> = sqlx::query_as(
-            "select p.id, p.name, p.size, extract(epoch from p.updated_at)::bigint,
-                    coalesce(a.project_id = p.id, false)
-             from projects p left join active_projects a on a.account_id = p.account_id
-             where p.account_id = $1 order by p.updated_at desc",
-        )
-        .bind(account)
-        .fetch_all(db)
-        .await?;
-        let used: i64 = rows.iter().map(|r| i64::from(r.2)).sum();
+        let rows = projects(db, account).await?;
+        let used: i64 = rows.iter().map(|r| i64::from(r.size)).sum();
         let answer = json!({
-            "rows": rows.iter().map(|(id, name, size, at, active)| json!([name, id, size / 1024, at, active])).collect::<Vec<_>>(),
+            "rows": rows.iter().map(|r| json!([r.name, r.id, r.size / 1024, r.updated_at, r.active])).collect::<Vec<_>>(),
             "columns": ["name", "id", "kb", "updated", "active"],
             "used_kb": used / 1024,
             "limits": plan.limits,
@@ -422,38 +527,20 @@ impl Engine {
         plan: &Plan,
         name: Option<&str>,
     ) -> anyhow::Result<Value> {
-        let count: i64 = sqlx::query_scalar("select count(*) from projects where account_id = $1")
-            .bind(account)
-            .fetch_one(db)
-            .await?;
-        let most = plan.limits["projects"].as_i64().unwrap_or(0);
-        if count >= most {
-            return Ok(refused(format!(
-                "the {} plan keeps {most} projects; open one with file action=open, or delete one from the account page",
-                plan.name
-            )));
-        }
-        let name = match name.map(clean_name).filter(|n| !n.is_empty()) {
-            Some(name) => name,
-            None => format!("Projeto {}", count + 1),
+        let (id, name) = match make(db, account, plan, name).await? {
+            Made::New { id, name } => (id, name),
+            Made::TooMany(most) => {
+                return Ok(refused(format!(
+                    "the {} plan keeps {most} projects; open one with file action=open, or delete one from the account page",
+                    plan.name
+                )));
+            }
+            Made::Full(why) => return Ok(refused(why)),
+            Made::Taken(name) => {
+                return Ok(refused(format!("there is a project named {name} already")));
+            }
         };
-        let data = newera_core::to_project_bytes(&Document::default());
-        let id = secret::id();
-        let made = sqlx::query(
-            "insert into projects (id, account_id, name, data, size) values ($1, $2, $3, $4, $5)",
-        )
-        .bind(&id)
-        .bind(account)
-        .bind(&name)
-        .bind(&data)
-        .bind(i32::try_from(data.len()).unwrap_or(i32::MAX))
-        .execute(db)
-        .await;
-        if made.is_err() {
-            return Ok(refused(format!("there is a project named {name} already")));
-        }
-        activate(db, account, &id).await?;
-        self.loaded.lock().expect("loaded").remove(account);
+        self.activate(db, account, &id).await?;
         Ok(said(format!("ok new project {name}")))
     }
 
@@ -503,9 +590,44 @@ impl Engine {
                 "no project named {wanted}; projects lists them"
             )));
         };
-        activate(db, account, &id).await?;
-        self.loaded.lock().expect("loaded").remove(account);
+        self.activate(db, account, &id).await?;
         Ok(said(format!("ok opened {name}")))
+    }
+
+    /// Makes `project` the account's active one, if it is the account's:
+    /// what its AI works on when no tab holds the room, and what renders are
+    /// of. The copy open of another project is dropped, so the next call
+    /// opens this one. Every switch goes through here: the AI's
+    /// `file action=new` and `open`, and a tab showing one of the account's
+    /// projects. A copy of the same project stays: it is the one wanted.
+    /// False when the account has no such project.
+    ///
+    /// # Errors
+    ///
+    /// When the database fails.
+    ///
+    /// # Panics
+    ///
+    /// If another thread panicked while holding the open projects.
+    pub async fn activate(&self, db: &PgPool, account: &str, project: &str) -> sqlx::Result<bool> {
+        let made: Option<String> = sqlx::query_scalar(
+            "insert into active_projects (account_id, project_id)
+             select account_id, id from projects where account_id = $1 and id = $2
+             on conflict (account_id) do update set project_id = excluded.project_id
+             returning project_id",
+        )
+        .bind(account)
+        .bind(project)
+        .fetch_optional(db)
+        .await?;
+        if made.is_none() {
+            return Ok(false);
+        }
+        let mut loaded = self.loaded.lock().expect("loaded");
+        if loaded.get(account).is_some_and(|l| l.project != project) {
+            loaded.remove(account);
+        }
+        Ok(true)
     }
 
     /// The account's active project, open — made first if it has none.
@@ -668,18 +790,6 @@ async fn count(db: &PgPool, account: &str, kind: &str) -> sqlx::Result<()> {
     )
     .bind(account)
     .bind(kind)
-    .execute(db)
-    .await?;
-    Ok(())
-}
-
-async fn activate(db: &PgPool, account: &str, project: &str) -> sqlx::Result<()> {
-    sqlx::query(
-        "insert into active_projects (account_id, project_id) values ($1, $2)
-         on conflict (account_id) do update set project_id = $2",
-    )
-    .bind(account)
-    .bind(project)
     .execute(db)
     .await?;
     Ok(())

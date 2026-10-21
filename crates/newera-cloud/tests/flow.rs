@@ -3734,11 +3734,11 @@ async fn a_render_the_tab_cannot_vouch_for_comes_with_a_note() {
         ),
         (
             Some(json!({"type": "result", "ok": true, "result": {"project": other, "revision": 1}})),
-            "This render is of the active project, Projeto 1; the editor tab shows another project, Varanda, and its edits are not in it. To render what the tab shows, the person opens Projeto 1 in the editor tab, or closes the tab so that file action=open can make Varanda the active project.".to_owned(),
+            "This render is of the active project, Projeto 1; the editor tab shows another project, Varanda, and its edits are not in it. Reloading the editor tab makes Varanda the active project; then ask again.".to_owned(),
         ),
         (
             Some(json!({"type": "result", "ok": true, "result": {"project": "not-theirs", "revision": 1}})),
-            "This render is of the active project, Projeto 1; the editor tab shows a project this account does not have (not-theirs), and its edits are not in it. To render what the tab shows, the person opens Projeto 1 in the editor tab.".to_owned(),
+            "This render is of the active project, Projeto 1; the editor tab shows a project this account does not have (not-theirs), and its edits are not in it.".to_owned(),
         ),
         (
             Some(json!({"type": "result", "ok": true, "result": {"project": id}})),
@@ -3767,4 +3767,609 @@ async fn a_render_the_tab_cannot_vouch_for_comes_with_a_note() {
             );
         }
     }
+}
+
+/// The account's projects as the editor asks for them.
+async fn listed(base: &str, cookie: Option<&str>, origin: Option<&str>) -> reqwest::Response {
+    let mut request = client().get(format!("{base}/account/projects"));
+    if let Some(cookie) = cookie {
+        request = request.header("cookie", cookie);
+    }
+    if let Some(origin) = origin {
+        request = request.header("origin", origin);
+    }
+    request.send().await.unwrap()
+}
+
+/// A project made from the editor, with `body` as sent.
+async fn made(
+    base: &str,
+    cookie: Option<&str>,
+    origin: Option<&str>,
+    body: &str,
+) -> reqwest::Response {
+    let mut request = client()
+        .post(format!("{base}/account/projects"))
+        .header("content-type", "application/json")
+        .body(body.to_owned());
+    if let Some(cookie) = cookie {
+        request = request.header("cookie", cookie);
+    }
+    if let Some(origin) = origin {
+        request = request.header("origin", origin);
+    }
+    request.send().await.unwrap()
+}
+
+/// A project of the account of `email`, put straight into the database,
+/// last changed at `at` seconds since the epoch.
+async fn planted_project(state: &AppState, email: &str, id: &str, name: &str, size: i32, at: i64) {
+    sqlx::query(
+        "insert into projects (id, account_id, name, data, size, updated_at)
+         select $1, id, $2, '', $3, to_timestamp($4::bigint) from accounts where lower(email) = lower($5)",
+    )
+    .bind(id)
+    .bind(name)
+    .bind(size)
+    .bind(at)
+    .bind(email)
+    .execute(&state.db)
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn the_editor_lists_the_accounts_projects_last_changed_first() {
+    let Some((base, state)) = service().await else {
+        return;
+    };
+    let (cookie, _, _) = credentials(&base, &state, "lister@example.com").await;
+    let (other, _, _) = credentials(&base, &state, "neighbour@example.com").await;
+    planted_project(
+        &state,
+        "lister@example.com",
+        "old",
+        "Old house",
+        100,
+        1_700_000_000,
+    )
+    .await;
+    planted_project(
+        &state,
+        "lister@example.com",
+        "new",
+        "New flat",
+        2048,
+        1_700_000_500,
+    )
+    .await;
+    planted_project(&state, "lister@example.com", "mid", "Mid", 7, 1_700_000_200).await;
+    planted_project(
+        &state,
+        "neighbour@example.com",
+        "theirs",
+        "Theirs",
+        1,
+        1_700_000_900,
+    )
+    .await;
+    sqlx::query(
+        "insert into active_projects (account_id, project_id)
+         select account_id, id from projects where id = 'mid'",
+    )
+    .execute(&state.db)
+    .await
+    .unwrap();
+
+    let answer = listed(&base, Some(&cookie), Some(SITE)).await;
+    assert_eq!(answer.status(), 200);
+    assert_eq!(answer.headers()["access-control-allow-origin"], SITE);
+    assert_eq!(answer.headers()["access-control-allow-credentials"], "true");
+    assert_eq!(
+        answer.json::<Value>().await.unwrap(),
+        json!({"projects": [
+            {"id": "new", "name": "New flat", "size": 2048, "updated_at": 1_700_000_500, "active": false},
+            {"id": "mid", "name": "Mid", "size": 7, "updated_at": 1_700_000_200, "active": true},
+            {"id": "old", "name": "Old house", "size": 100, "updated_at": 1_700_000_000, "active": false},
+        ]})
+    );
+    assert_eq!(
+        listed(&base, Some(&other), Some(SITE))
+            .await
+            .json::<Value>()
+            .await
+            .unwrap(),
+        json!({"projects": [
+            {"id": "theirs", "name": "Theirs", "size": 1, "updated_at": 1_700_000_900, "active": false},
+        ]})
+    );
+    let (fresh, _, _) = credentials(&base, &state, "nothing@example.com").await;
+    assert_eq!(
+        listed(&base, Some(&fresh), Some(SITE))
+            .await
+            .json::<Value>()
+            .await
+            .unwrap(),
+        json!({"projects": []})
+    );
+    let anonymous = listed(&base, None, Some(SITE)).await;
+    assert_eq!(anonymous.status(), 401);
+    assert_eq!(anonymous.text().await.unwrap(), "");
+}
+
+#[tokio::test]
+async fn the_editor_makes_an_empty_project_that_opens_and_saves_like_any_other() {
+    let Some((base, state)) = service().await else {
+        return;
+    };
+    let (cookie, _, _) = credentials(&base, &state, "maker@example.com").await;
+    let answer = made(
+        &base,
+        Some(&cookie),
+        Some(SITE),
+        r#"{"name": "  Beach house "}"#,
+    )
+    .await;
+    assert_eq!(answer.status(), 201);
+    assert_eq!(answer.headers()["x-project-revision"], "0");
+    assert_eq!(answer.headers()["access-control-allow-origin"], SITE);
+    let body = answer.json::<Value>().await.unwrap();
+    let id = body["id"].as_str().unwrap().to_owned();
+    assert_eq!(
+        body,
+        json!({"id": id, "name": "Beach house", "revision": 0})
+    );
+    assert_eq!(stored(&state, &id).await, (0, empty_project()));
+
+    // It opens the way a project opened by link does, at revision 0…
+    let fetched = client()
+        .get(format!("{base}/account/projects/{id}"))
+        .header("cookie", &cookie)
+        .header("origin", SITE)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(fetched.status(), 200);
+    assert_eq!(fetched.headers()["x-project-revision"], "0");
+    assert_eq!(
+        fetched.headers()["content-disposition"],
+        r#"attachment; filename="Beach house.newera"; filename*=UTF-8''Beach%20house.newera"#
+    );
+    assert_eq!(fetched.bytes().await.unwrap().to_vec(), empty_project());
+    // …and the tab's first save on that revision keeps it as 1.
+    let saved = put(
+        &base,
+        &id,
+        Some(&cookie),
+        Some(SITE),
+        Some("0"),
+        empty_project(),
+    )
+    .await;
+    assert_eq!(saved.status(), 200);
+    assert_eq!(saved.json::<Value>().await.unwrap(), json!({"revision": 1}));
+
+    // It is listed; it becomes the AI's project once the tab binds it.
+    let list = listed(&base, Some(&cookie), Some(SITE))
+        .await
+        .json::<Value>()
+        .await
+        .unwrap();
+    assert_eq!(list["projects"].as_array().unwrap().len(), 1);
+    assert_eq!(list["projects"][0]["id"], json!(id));
+    assert_eq!(list["projects"][0]["active"], json!(false));
+}
+
+#[tokio::test]
+async fn a_name_the_editor_sends_is_cleaned_and_kept_once() {
+    let Some((base, state)) = service().await else {
+        return;
+    };
+    let (cookie, _, _) = credentials(&base, &state, "namer@example.com").await;
+    // More projects than the free plan keeps are made here.
+    sqlx::query("update accounts set given_plan = 'supporter' where email = 'namer@example.com'")
+        .execute(&state.db)
+        .await
+        .unwrap();
+    let name_of = |body: Value| body["name"].as_str().unwrap().to_owned();
+    let cleaned = made(
+        &base,
+        Some(&cookie),
+        Some(SITE),
+        r#"{"name": " ../../etc/passwd.newera "}"#,
+    )
+    .await;
+    assert_eq!(cleaned.status(), 201);
+    assert_eq!(name_of(cleaned.json().await.unwrap()), "....etcpasswd");
+    let taken = made(
+        &base,
+        Some(&cookie),
+        Some(SITE),
+        r#"{"name": "....ETCPASSWD"}"#,
+    )
+    .await;
+    assert_eq!(taken.status(), 409);
+    assert_eq!(
+        taken.json::<Value>().await.unwrap(),
+        json!({"error": "there is a project named ....ETCPASSWD already"})
+    );
+    // Nothing left of the name, or none sent: numbered, as the AI's are.
+    for body in [r#"{"name": " / "}"#, "{}", ""] {
+        let numbered = made(&base, Some(&cookie), Some(SITE), body).await;
+        assert_eq!(numbered.status(), 201, "{body:?}");
+        let count: i64 = sqlx::query_scalar(
+            "select count(*) from projects p join accounts a on a.id = p.account_id
+             where a.email = 'namer@example.com'",
+        )
+        .fetch_one(&state.db)
+        .await
+        .unwrap();
+        assert_eq!(
+            name_of(numbered.json().await.unwrap()),
+            format!("Projeto {count}"),
+            "{body:?}"
+        );
+    }
+    let long = made(
+        &base,
+        Some(&cookie),
+        Some(SITE),
+        &json!({"name": "x".repeat(200)}).to_string(),
+    )
+    .await;
+    assert_eq!(name_of(long.json().await.unwrap()), "x".repeat(80));
+    let garbled = made(&base, Some(&cookie), Some(SITE), r#"{"name": 7}"#).await;
+    assert_eq!(garbled.status(), 400);
+    assert_eq!(
+        count(
+            &state,
+            "select count(*) from projects p join accounts a on a.id = p.account_id where a.email = $1",
+            "namer@example.com"
+        )
+        .await,
+        5
+    );
+}
+
+#[tokio::test]
+async fn the_editor_makes_no_project_beyond_the_plan() {
+    let Some((base, state)) = service().await else {
+        return;
+    };
+    let (cookie, access, _) = credentials(&base, &state, "limit@example.com").await;
+    let projects = || {
+        count(
+            &state,
+            "select count(*) from projects p join accounts a on a.id = p.account_id where a.email = $1",
+            "limit@example.com",
+        )
+    };
+    // The free plan keeps three.
+    for n in 1..=3 {
+        let answer = made(
+            &base,
+            Some(&cookie),
+            Some(SITE),
+            &json!({"name": format!("P{n}")}).to_string(),
+        )
+        .await;
+        assert_eq!(answer.status(), 201);
+    }
+    let refused = made(&base, Some(&cookie), Some(SITE), r#"{"name": "P4"}"#).await;
+    assert_eq!(refused.status(), 403);
+    assert_eq!(
+        refused.json::<Value>().await.unwrap(),
+        json!({"error": "the Free plan keeps 3 projects; delete one from the account page"})
+    );
+    assert_eq!(projects().await, 3);
+    // Room for more projects, but not for their bytes.
+    sqlx::query(
+        r#"insert into plans (code, name, limits) values ('tiny', 'Tiny', '{"projects": 10, "storage_mb": 1, "draft_renders_per_day": 0, "hq_renders_per_month": 0}')"#,
+    )
+    .execute(&state.db)
+    .await
+    .unwrap();
+    sqlx::query("update accounts set given_plan = 'tiny' where email = 'limit@example.com'")
+        .execute(&state.db)
+        .await
+        .unwrap();
+    sqlx::query(
+        "update projects set size = 1048576 - (select coalesce(sum(size), 0) from projects
+             where name <> 'P1' and account_id = (select id from accounts where email = 'limit@example.com'))
+         where name = 'P1'",
+    )
+    .execute(&state.db)
+    .await
+    .unwrap();
+    let full = made(&base, Some(&cookie), Some(SITE), r#"{"name": "P4"}"#).await;
+    assert_eq!(full.status(), 413);
+    assert_eq!(
+        full.json::<Value>().await.unwrap(),
+        json!({"error": "the Tiny plan stores 1 MB and this would take 1 MB"})
+    );
+    assert_eq!(projects().await, 3);
+    // And the AI's own new project is held to the same room.
+    let refused = tool(
+        &base,
+        &access,
+        "file",
+        json!({"action": "new", "name": "P5"}),
+    )
+    .await;
+    assert_eq!(
+        refused,
+        json!({"content": [{"type": "text", "text": "the Tiny plan stores 1 MB and this would take 1 MB"}], "isError": true})
+    );
+    assert_eq!(projects().await, 3);
+}
+
+#[tokio::test]
+async fn only_the_signed_in_editor_makes_a_project() {
+    let Some((base, state)) = service().await else {
+        return;
+    };
+    let (cookie, _, _) = credentials(&base, &state, "guard@example.com").await;
+    let anonymous = made(&base, None, Some(SITE), r#"{"name": "A"}"#).await;
+    assert_eq!(anonymous.status(), 401);
+    let elsewhere = made(
+        &base,
+        Some(&cookie),
+        Some("https://evil.example"),
+        r#"{"name": "A"}"#,
+    )
+    .await;
+    assert_eq!(elsewhere.status(), 403);
+    let no_origin = made(&base, Some(&cookie), None, r#"{"name": "A"}"#).await;
+    assert_eq!(no_origin.status(), 403);
+    // The browser asks first whether the site may send JSON with the cookie.
+    let preflight = client()
+        .request(reqwest::Method::OPTIONS, format!("{base}/account/projects"))
+        .header("origin", SITE)
+        .header("access-control-request-method", "POST")
+        .header("access-control-request-headers", "content-type")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(preflight.status(), 200);
+    assert_eq!(preflight.headers()["access-control-allow-origin"], SITE);
+    assert_eq!(
+        preflight.headers()["access-control-allow-credentials"],
+        "true"
+    );
+    let none: i64 = sqlx::query_scalar("select count(*) from projects")
+        .fetch_one(&state.db)
+        .await
+        .unwrap();
+    assert_eq!(none, 0);
+}
+
+#[tokio::test]
+async fn the_account_page_opens_each_project_in_the_editor() {
+    let Some((base, state)) = service().await else {
+        return;
+    };
+    let (cookie, _, _) = credentials(&base, &state, "page@example.com").await;
+    planted_project(
+        &state,
+        "page@example.com",
+        "p1",
+        "Casa & jardim",
+        4096,
+        1_700_000_000,
+    )
+    .await;
+    let page = client()
+        .get(format!("{base}/account"))
+        .header("cookie", &cookie)
+        .header("accept-language", "en")
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    let file = format!("{base}/account/projects/p1");
+    let link = format!(
+        "{SITE}/editor/?project={}&amp;relay={}",
+        url::form_urlencoded::byte_serialize(file.as_bytes()).collect::<String>(),
+        url::form_urlencoded::byte_serialize(base.as_bytes()).collect::<String>()
+    );
+    assert!(
+        page.contains(&format!(
+            r#"<li><a href="/account/projects/p1">Casa &amp; jardim.newera</a> <span class="muted">4 KB</span> · <a href="{link}">open in editor</a></li>"#
+        )),
+        "{page}"
+    );
+    let editor = format!(
+        r#"<a class="button" href="{SITE}/editor/?relay={}">"#,
+        url::form_urlencoded::byte_serialize(base.as_bytes()).collect::<String>()
+    );
+    assert!(page.contains(&editor), "{page}");
+}
+
+/// The tab says it shows the project `id`.
+async fn activated(
+    base: &str,
+    id: &str,
+    cookie: Option<&str>,
+    origin: Option<&str>,
+) -> reqwest::Response {
+    let mut request = client()
+        .post(format!("{base}/account/projects/{id}/active"))
+        .header("content-type", "application/json")
+        .body("{}");
+    if let Some(cookie) = cookie {
+        request = request.header("cookie", cookie);
+    }
+    if let Some(origin) = origin {
+        request = request.header("origin", origin);
+    }
+    request.send().await.unwrap()
+}
+
+/// The ids of the account's projects, and which one is active, as the AI's
+/// `projects` tool says.
+async fn active_of(base: &str, access: &str) -> Vec<(String, bool)> {
+    let answer = tool(base, access, "projects", json!({})).await;
+    let listed: Value =
+        serde_json::from_str(answer["content"][0]["text"].as_str().unwrap()).unwrap();
+    let mut rows: Vec<(String, bool)> = listed["rows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|row| {
+            (
+                row[1].as_str().unwrap().to_owned(),
+                row[4].as_bool().unwrap(),
+            )
+        })
+        .collect();
+    rows.sort();
+    rows
+}
+
+#[tokio::test]
+async fn a_project_the_tab_binds_is_the_one_the_ai_works_on() {
+    let Some((base, state)) = service().await else {
+        return;
+    };
+    let (cookie, access, first) = drawn_project(&base, &state, "binder@example.com").await;
+    assert_eq!(counts(&base, &access).await, counted(4));
+    // Made from the editor, then bound by the tab that opens it.
+    let made = made(&base, Some(&cookie), Some(SITE), r#"{"name": "Second"}"#).await;
+    let second = made.json::<Value>().await.unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let mut both = vec![(first.clone(), true), (second.clone(), false)];
+    both.sort();
+    assert_eq!(active_of(&base, &access).await, both);
+    let bound = activated(&base, &second, Some(&cookie), Some(SITE)).await;
+    assert_eq!(bound.status(), 204);
+    assert_eq!(bound.headers()["access-control-allow-origin"], SITE);
+    let mut both = vec![(first.clone(), false), (second.clone(), true)];
+    both.sort();
+    assert_eq!(active_of(&base, &access).await, both);
+    // The engine's next call works on it, not on its copy of the first.
+    assert_eq!(counts(&base, &access).await, counted(0));
+    let drawn = tool(
+        &base,
+        &access,
+        "create",
+        json!({"walls": [{"pts": [[0, 0], [100, 0]]}]}),
+    )
+    .await;
+    assert_eq!(drawn["isError"], false, "{drawn}");
+    assert_eq!(stored(&state, &second).await.0, 1);
+    assert_eq!(stored(&state, &first).await.0, 1, "the first is left alone");
+    // A project opened by link binds the same way.
+    let back = activated(&base, &first, Some(&cookie), Some(SITE)).await;
+    assert_eq!(back.status(), 204);
+    assert_eq!(counts(&base, &access).await, counted(4));
+}
+
+#[tokio::test]
+async fn only_the_owners_editor_switches_the_active_project() {
+    let Some((base, state)) = service().await else {
+        return;
+    };
+    let (cookie, access, first) = drawn_project(&base, &state, "keeper@example.com").await;
+    let (other, _, _) = credentials(&base, &state, "intruder@example.com").await;
+    let made = made(&base, Some(&cookie), Some(SITE), r#"{"name": "Second"}"#).await;
+    let second = made.json::<Value>().await.unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let before = active_of(&base, &access).await;
+    assert_eq!(
+        activated(&base, &second, None, Some(SITE)).await.status(),
+        401
+    );
+    assert_eq!(
+        activated(&base, &second, Some(&other), Some(SITE))
+            .await
+            .status(),
+        404
+    );
+    assert_eq!(
+        activated(&base, &second, Some(&cookie), Some("https://evil.example"))
+            .await
+            .status(),
+        403
+    );
+    assert_eq!(
+        activated(&base, &second, Some(&cookie), None)
+            .await
+            .status(),
+        403
+    );
+    assert_eq!(
+        activated(&base, "nope", Some(&cookie), Some(SITE))
+            .await
+            .status(),
+        404
+    );
+    assert_eq!(active_of(&base, &access).await, before);
+    assert!(before.contains(&(first, true)));
+    // The other account's active project is not touched either.
+    let theirs: i64 = sqlx::query_scalar(
+        "select count(*) from active_projects a join accounts c on c.id = a.account_id
+         where c.email = 'intruder@example.com'",
+    )
+    .fetch_one(&state.db)
+    .await
+    .unwrap();
+    assert_eq!(theirs, 0);
+}
+
+#[tokio::test]
+async fn a_name_beyond_ascii_comes_back_as_written() {
+    let Some((base, state)) = service().await else {
+        return;
+    };
+    let (cookie, _, _) = credentials(&base, &state, "unicode@example.com").await;
+    let answer = made(
+        &base,
+        Some(&cookie),
+        Some(SITE),
+        r#"{"name": "Escritório"}"#,
+    )
+    .await;
+    let body = answer.json::<Value>().await.unwrap();
+    assert_eq!(body["name"], "Escritório");
+    let id = body["id"].as_str().unwrap();
+    let fetched = client()
+        .get(format!("{base}/account/projects/{id}"))
+        .header("cookie", &cookie)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        fetched.headers()["content-disposition"],
+        r#"attachment; filename="Escrit_rio.newera"; filename*=UTF-8''Escrit%C3%B3rio.newera"#
+    );
+}
+
+#[tokio::test]
+async fn the_tab_naming_the_project_already_active_keeps_the_engines_copy() {
+    let Some((base, state)) = service().await else {
+        return;
+    };
+    let (cookie, access, id) = drawn_project(&base, &state, "same@example.com").await;
+    assert_eq!(counts(&base, &access).await, counted(4));
+    // The stored bytes change behind the engine's back, revision untouched:
+    // only a fresh load would see them.
+    sqlx::query("update projects set data = $1 where id = $2")
+        .bind(empty_project())
+        .bind(&id)
+        .execute(&state.db)
+        .await
+        .unwrap();
+    assert_eq!(
+        activated(&base, &id, Some(&cookie), Some(SITE))
+            .await
+            .status(),
+        204
+    );
+    assert_eq!(counts(&base, &access).await, counted(4), "the copy is kept");
 }

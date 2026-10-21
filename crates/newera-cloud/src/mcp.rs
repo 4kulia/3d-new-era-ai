@@ -334,9 +334,9 @@ async fn flush(app: &AppState, account: &str, room: &str) -> Option<String> {
 }
 
 /// The note for a render of the active project while the tab shows
-/// `shown`. While the tab holds the room every other tool goes to it, so
-/// `file action=open` cannot switch the active project then: the remedies
-/// named are the ones that work.
+/// `shown`. A tab makes the project it shows the active one when it binds
+/// it and when it claims the room, so this is a tab that has not managed to
+/// yet: reloading it does both again.
 async fn elsewhere(app: &AppState, account: &str, active: Option<&str>, shown: &str) -> String {
     let name = |id: Option<&str>| {
         let id = id.map(str::to_owned);
@@ -360,10 +360,10 @@ async fn elsewhere(app: &AppState, account: &str, active: Option<&str>, shown: &
         .unwrap_or_else(|| "the account's active project".to_owned());
     match name(Some(shown)).await {
         Some(shown) => format!(
-            "This render is of the active project, {active}; the editor tab shows another project, {shown}, and its edits are not in it. To render what the tab shows, the person opens {active} in the editor tab, or closes the tab so that file action=open can make {shown} the active project."
+            "This render is of the active project, {active}; the editor tab shows another project, {shown}, and its edits are not in it. Reloading the editor tab makes {shown} the active project; then ask again."
         ),
         None => format!(
-            "This render is of the active project, {active}; the editor tab shows a project this account does not have ({shown}), and its edits are not in it. To render what the tab shows, the person opens {active} in the editor tab."
+            "This render is of the active project, {active}; the editor tab shows a project this account does not have ({shown}), and its edits are not in it."
         ),
     }
 }

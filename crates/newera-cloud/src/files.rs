@@ -23,7 +23,8 @@ pub async fn get(State(app): State<AppState>, Path(token): Path<String>) -> Resp
     download(&name, &content_type, data)
 }
 
-/// A file to save, under its own name.
+/// A file to save, under its own name: as written (RFC 5987
+/// `filename*`), and in plain ASCII for whatever reads only `filename`.
 pub fn download(name: &str, content_type: &str, data: Vec<u8>) -> Response {
     let safe: String = name
         .chars()
@@ -40,7 +41,10 @@ pub fn download(name: &str, content_type: &str, data: Vec<u8>) -> Response {
             (header::CONTENT_TYPE, content_type.to_owned()),
             (
                 header::CONTENT_DISPOSITION,
-                format!("attachment; filename=\"{safe}\""),
+                format!(
+                    "attachment; filename=\"{safe}\"; filename*=UTF-8''{}",
+                    ext_value(name)
+                ),
             ),
             (header::CACHE_CONTROL, "private, no-store".to_owned()),
             (header::X_CONTENT_TYPE_OPTIONS, "nosniff".to_owned()),
@@ -48,4 +52,18 @@ pub fn download(name: &str, content_type: &str, data: Vec<u8>) -> Response {
         Body::from(data),
     )
         .into_response()
+}
+
+/// `name` as an RFC 5987 `ext-value`: UTF-8, every byte but its
+/// `attr-char`s percent-encoded.
+fn ext_value(name: &str) -> String {
+    use std::fmt::Write as _;
+    name.bytes().fold(String::new(), |mut out, byte| {
+        if byte.is_ascii_alphanumeric() || b"!#$&+-.^_`|~".contains(&byte) {
+            out.push(char::from(byte));
+        } else {
+            let _ = write!(out, "%{byte:02X}");
+        }
+        out
+    })
 }

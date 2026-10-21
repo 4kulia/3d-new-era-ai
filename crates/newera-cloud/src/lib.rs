@@ -128,9 +128,14 @@ pub fn router(state: &AppState) -> Router {
         .route("/account/me", get(account::me))
         .route("/account/claim", post(account::claim))
         .route(
+            "/account/projects",
+            get(account::list).post(account::create),
+        )
+        .route(
             "/account/projects/{id}",
             get(account::download).put(account::upload),
         )
+        .route("/account/projects/{id}/active", post(account::activate))
         .layer(
             CorsLayer::new()
                 .allow_origin(origins)

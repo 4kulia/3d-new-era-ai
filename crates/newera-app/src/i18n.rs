@@ -2117,6 +2117,77 @@ fn translations(pt: &str) -> Option<[&'static str; 3]> {
             "Quien tenga esa dirección edita este proyecto: trátela como una contraseña.",
             "Quiconque a cette adresse modifie ce projet : traitez-la comme un mot de passe.",
         ],
+        "Abrir do servidor…" => [
+            "Open from server…",
+            "Abrir desde el servidor…",
+            "Ouvrir depuis le serveur…",
+        ],
+        "Novo projeto no servidor…" => [
+            "New project on server…",
+            "Nuevo proyecto en el servidor…",
+            "Nouveau projet sur le serveur…",
+        ],
+        "Novo projeto no servidor" => [
+            "New project on the server",
+            "Nuevo proyecto en el servidor",
+            "Nouveau projet sur le serveur",
+        ],
+        "Projetos no servidor" => [
+            "Projects on the server",
+            "Proyectos en el servidor",
+            "Projets sur le serveur",
+        ],
+        "Carregando os projetos…" => [
+            "Loading the projects…",
+            "Cargando los proyectos…",
+            "Chargement des projets…",
+        ],
+        "⚠ Não foi possível listar os projetos: {}" => [
+            "⚠ Could not list the projects: {}",
+            "⚠ No se pudieron listar los proyectos: {}",
+            "⚠ Impossible de lister les projets : {}",
+        ],
+        "Nenhum projeto no servidor ainda." => [
+            "No projects on the server yet.",
+            "Todavía no hay proyectos en el servidor.",
+            "Aucun projet sur le serveur pour l'instant.",
+        ],
+        "Última alteração" => ["Last change", "Último cambio", "Dernière modification"],
+        "Criando o projeto…" => [
+            "Creating the project…",
+            "Creando el proyecto…",
+            "Création du projet…",
+        ],
+        "⚠ O servidor recusou: {}" => [
+            "⚠ The server refused: {}",
+            "⚠ El servidor lo rechazó: {}",
+            "⚠ Le serveur a refusé : {}",
+        ],
+        "Entre na sua conta para ver os projetos do servidor." => [
+            "Sign in to your account to see the projects on the server.",
+            "Inicie sesión en su cuenta para ver los proyectos del servidor.",
+            "Connectez-vous à votre compte pour voir les projets du serveur.",
+        ],
+        "O serviço respondeu algo inesperado: {}" => [
+            "The service answered something unexpected: {}",
+            "El servicio respondió algo inesperado: {}",
+            "Le service a répondu quelque chose d'inattendu : {}",
+        ],
+        "O serviço respondeu algo inesperado" => [
+            "The service answered something unexpected",
+            "El servicio respondió algo inesperado",
+            "Le service a répondu quelque chose d'inattendu",
+        ],
+        "O serviço respondeu {}" => [
+            "The service answered {}",
+            "El servicio respondió {}",
+            "Le service a répondu {}",
+        ],
+        "Aberto do servidor: {}" => [
+            "Opened from the server: {}",
+            "Abierto desde el servidor: {}",
+            "Ouvert depuis le serveur : {}",
+        ],
         _ => return None,
     })
 }

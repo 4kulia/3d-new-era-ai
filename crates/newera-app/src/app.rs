@@ -27,6 +27,12 @@ const PASTE_OFFSET: f64 = 30.0;
 pub(crate) enum Pending {
     New,
     Open(Option<PathBuf>),
+    /// Pick one of the account's projects on the service to open.
+    #[cfg(target_arch = "wasm32")]
+    OpenFromServer,
+    /// Name a new project on the service, and open it.
+    #[cfg(target_arch = "wasm32")]
+    NewOnServer,
     Quit,
 }
 
@@ -345,13 +351,14 @@ impl NewEraApp {
     fn autosave(&mut self, ctx: &egui::Context) {
         match crate::ai_web::autosave(&self.document, ctx, &self.ai_link) {
             Some(crate::ai_web::Said::Reload {
+                url,
                 name,
                 bytes,
                 revision,
             }) => {
                 if self.open_bytes(&name, &bytes) {
                     let now = self.document.read().revision();
-                    crate::ai_web::bind(&self.ai_link, &name, revision, now);
+                    crate::ai_web::bind(&self.ai_link, &url, &name, revision, now);
                     self.set_status(crate::i18n::tr(
                         "O projeto mudou na nuvem: esta aba baixou uma cópia do seu e abriu a versão da nuvem.",
                     ));
@@ -359,6 +366,36 @@ impl NewEraApp {
             }
             Some(crate::ai_web::Said::Note(text)) => self.set_status(text),
             None => {}
+        }
+    }
+
+    /// Opens the project fetched from the service when it comes, the way a
+    /// `?project=` link opens it: bound to its address there, saved back
+    /// after each change, and written into the address bar for a reload.
+    #[cfg(target_arch = "wasm32")]
+    fn server_project(&mut self) {
+        let Some(arrived) = crate::ai_web::take_arrived(&self.ai_link) else {
+            return;
+        };
+        if matches!(
+            self.dialog,
+            Some(Dialog::ServerProjects | Dialog::NewServerProject { .. })
+        ) {
+            self.dialog = None;
+        }
+        if self.open_bytes(&arrived.name, &arrived.bytes) {
+            let now = self.document.read().revision();
+            crate::ai_web::bind(
+                &self.ai_link,
+                &arrived.url,
+                &arrived.name,
+                arrived.revision,
+                now,
+            );
+            self.set_status(crate::i18n::fill(
+                "Aberto do servidor: {}",
+                &[&arrived.name],
+            ));
         }
     }
 
@@ -412,6 +449,19 @@ impl NewEraApp {
             }
             #[cfg(target_arch = "wasm32")]
             Pending::Open(_) => self.pick_request = Some(crate::files::PickKind::Project),
+            #[cfg(target_arch = "wasm32")]
+            Pending::OpenFromServer => {
+                crate::ai_web::forget_asked(&self.ai_link);
+                crate::ai_web::list_projects(&self.ai_link);
+                self.dialog = Some(Dialog::ServerProjects);
+            }
+            #[cfg(target_arch = "wasm32")]
+            Pending::NewOnServer => {
+                crate::ai_web::forget_asked(&self.ai_link);
+                self.dialog = Some(Dialog::NewServerProject {
+                    name: String::new(),
+                });
+            }
             #[cfg(not(target_arch = "wasm32"))]
             Pending::Open(path) => {
                 let path = path.or_else(|| {
@@ -1421,6 +1471,31 @@ impl NewEraApp {
                     true,
                 ) {
                     self.request(Pending::Open(None));
+                }
+                // The account's projects, where the editor is served for a
+                // service that keeps them.
+                #[cfg(target_arch = "wasm32")]
+                if crate::ai_web::service().is_some()
+                    && crate::ai_web::account_known(&self.ai_link)
+                {
+                    if menu_item(
+                        ui,
+                        icon::CLOUD_ARROW_DOWN,
+                        crate::i18n::tr("Abrir do servidor…"),
+                        "",
+                        true,
+                    ) {
+                        self.request(Pending::OpenFromServer);
+                    }
+                    if menu_item(
+                        ui,
+                        icon::CLOUD,
+                        crate::i18n::tr("Novo projeto no servidor…"),
+                        "",
+                        true,
+                    ) {
+                        self.request(Pending::NewOnServer);
+                    }
                 }
                 let recent = self.settings.recent.clone();
                 ui.add_enabled_ui(!recent.is_empty(), |ui| {
@@ -2707,6 +2782,8 @@ impl eframe::App for NewEraApp {
         }
         #[cfg(target_arch = "wasm32")]
         self.web_files(&ctx);
+        #[cfg(target_arch = "wasm32")]
+        self.server_project();
         #[cfg(not(target_arch = "wasm32"))]
         self.collect_plugin();
         self.follow_document_camera();

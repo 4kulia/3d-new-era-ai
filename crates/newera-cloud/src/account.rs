@@ -35,7 +35,7 @@ pub async fn show(
 {thanks}
 {projects}
 {support}
-<a class="button" href="https://3dneweraai.com/app/">{editor}</a>
+<a class="button" href="{editor_href}">{editor}</a>
 <a class="button ghost" href="/logout">{out}</a>
 <details><summary class="muted">{close}</summary>
 <form method="post" action="/account/close">
@@ -52,6 +52,11 @@ pub async fn show(
         thanks = crate::billing::thanks(lang, &paid),
         projects = project_list(&app, &account.id, lang).await,
         support = crate::billing::account_links(&app, &account, lang).await,
+        editor_href = escape(&format!(
+            "{}?relay={}",
+            app.config.editor_url,
+            login::url_encode(&app.config.public_url)
+        )),
         editor = lang.pick("Abrir o editor", "Open the editor"),
         out = lang.pick("Sair", "Sign out"),
         close = lang.pick("Apagar a conta", "Close the account"),
@@ -76,36 +81,153 @@ pub async fn show(
     page(lang, lang.pick("Sua conta", "Your account"), &body).into_response()
 }
 
-/// The account's cloud projects, each with its download.
+/// The account's cloud projects, each with its download and a link that
+/// opens it in the editor, saving back here.
 async fn project_list(app: &AppState, account: &str, lang: Lang) -> String {
-    let rows: Vec<(String, String, i32)> = sqlx::query_as(
-        "select id, name, size from projects where account_id = $1 order by updated_at desc",
-    )
-    .bind(account)
-    .fetch_all(&app.db)
-    .await
-    .unwrap_or_default();
+    let rows = engine::projects(&app.db, account).await.unwrap_or_default();
     if rows.is_empty() {
         return String::new();
     }
-    let items = rows.iter().fold(String::new(), |mut out, (id, name, size)| {
+    let items = rows.iter().fold(String::new(), |mut out, p| {
         use std::fmt::Write as _;
         let _ = write!(
             out,
-            r#"<li><a href="/account/projects/{id}">{name}.newera</a> <span class="muted">{kb} KB</span></li>"#,
-            id = escape(id),
-            name = escape(name),
-            kb = size / 1024,
+            r#"<li><a href="/account/projects/{id}">{name}.newera</a> <span class="muted">{kb} KB</span> · <a href="{open}">{open_label}</a></li>"#,
+            id = escape(&p.id),
+            name = escape(&p.name),
+            kb = p.size / 1024,
+            open = escape(&engine::editor_link(
+                &app.config.editor_url,
+                &app.config.public_url,
+                &p.id
+            )),
+            open_label = lang.pick("abrir no editor", "open in editor"),
         );
         out
     });
     format!(
         r#"<p class="muted">{title}</p><ul>{items}</ul>"#,
         title = lang.pick(
-            "Projetos na nuvem (baixe e abra no editor ou no app):",
-            "Projects in the cloud (download, and open in the editor or the app):"
+            "Projetos na nuvem (abra no editor, ou baixe e abra no app):",
+            "Projects in the cloud (open in the editor, or download and open in the app):"
         ),
     )
+}
+
+/// The account's cloud projects, for the editor's "open from the server":
+/// the last changed first.
+pub async fn list(State(app): State<AppState>, headers: HeaderMap) -> Response {
+    let Some(account) = login::signed_in(&app, &headers).await else {
+        return StatusCode::UNAUTHORIZED.into_response();
+    };
+    match engine::projects(&app.db, &account.id).await {
+        Ok(projects) => Json(json!({"projects": projects})).into_response(),
+        Err(err) => {
+            tracing::error!("listing projects: {err}");
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        }
+    }
+}
+
+/// "This tab shows this project": the editor, on binding one of the
+/// account's projects (opened by link, from the server, or made there),
+/// makes it the account's active one, so its AI and its renders work on the
+/// project on screen. 204; 404 when the account has no such project.
+pub async fn activate(
+    State(app): State<AppState>,
+    headers: HeaderMap,
+    axum::extract::Path(id): axum::extract::Path<String>,
+) -> Response {
+    if !from_site(&app, &headers) {
+        return (
+            StatusCode::FORBIDDEN,
+            "only the editor can switch the project",
+        )
+            .into_response();
+    }
+    let Some(account) = login::signed_in(&app, &headers).await else {
+        return StatusCode::UNAUTHORIZED.into_response();
+    };
+    match app.engine.activate(&app.db, &account.id, &id).await {
+        Ok(true) => StatusCode::NO_CONTENT.into_response(),
+        Ok(false) => StatusCode::NOT_FOUND.into_response(),
+        Err(err) => {
+            tracing::error!("activating a project from the editor: {err}");
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        }
+    }
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct NewProject {
+    name: Option<String>,
+}
+
+/// Makes an empty cloud project for the editor's "new project on the
+/// server", within the plan as the AI's `file action=new` is. Answers its id,
+/// name and revision (201); 403 when the plan keeps no more projects, 413
+/// when it has no room, 409 when the name is taken.
+pub async fn create(
+    State(app): State<AppState>,
+    headers: HeaderMap,
+    body: axum::body::Bytes,
+) -> Response {
+    if !from_site(&app, &headers) {
+        return (StatusCode::FORBIDDEN, "only the editor can make a project").into_response();
+    }
+    let Some(account) = login::signed_in(&app, &headers).await else {
+        return StatusCode::UNAUTHORIZED.into_response();
+    };
+    let asked: NewProject = if body.iter().all(u8::is_ascii_whitespace) {
+        NewProject::default()
+    } else {
+        match serde_json::from_slice(&body) {
+            Ok(asked) => asked,
+            Err(err) => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(json!({"error": format!("the body is {{\"name\": \"…\"}}: {err}")})),
+                )
+                    .into_response();
+            }
+        }
+    };
+    let made = match accounts::plan_of(&app.db, &account.id).await {
+        Ok(plan) => engine::make(&app.db, &account.id, &plan, asked.name.as_deref())
+            .await
+            .map(|made| (plan, made)),
+        Err(err) => Err(err),
+    };
+    let (plan, made) = match made {
+        Ok(made) => made,
+        Err(err) => {
+            tracing::error!("making a project from the editor: {err}");
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    };
+    let (status, why) = match made {
+        engine::Made::New { id, name } => {
+            return (
+                StatusCode::CREATED,
+                [(REVISION, header::HeaderValue::from(0))],
+                Json(json!({"id": id, "name": name, "revision": 0})),
+            )
+                .into_response();
+        }
+        engine::Made::TooMany(most) => (
+            StatusCode::FORBIDDEN,
+            format!(
+                "the {} plan keeps {most} projects; delete one from the account page",
+                plan.name
+            ),
+        ),
+        engine::Made::Full(why) => (StatusCode::PAYLOAD_TOO_LARGE, why),
+        engine::Made::Taken(name) => (
+            StatusCode::CONFLICT,
+            format!("there is a project named {name} already"),
+        ),
+    };
+    (status, Json(json!({"error": why}))).into_response()
 }
 
 /// A cloud project as a `.newera` file, for its owner.

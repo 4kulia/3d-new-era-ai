@@ -24,6 +24,8 @@ mod render_job;
 pub mod render_web;
 #[cfg(test)]
 mod screens;
+#[cfg(any(target_arch = "wasm32", test))]
+mod server_projects;
 mod tabs;
 mod theme;
 mod video;
@@ -142,9 +144,10 @@ pub async fn start_web(
                 if let Some((name, bytes)) = project.filter(|_| asked || !app.restored)
                     && app.open_bytes(&name, &bytes)
                     && let Some(revision) = revision
+                    && let Some(url) = ai_web::cloud_url()
                 {
                     let now = app.document.read().revision();
-                    ai_web::bind(&app.ai_link, &name, revision, now);
+                    ai_web::bind(&app.ai_link, &url, &name, revision, now);
                 }
                 Ok(Box::new(app))
             }),

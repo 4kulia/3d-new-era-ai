@@ -252,8 +252,12 @@
     const response = await fetch(url, { credentials: own ? "include" : "same-origin" });
     if (response.ok) {
       bytes = new Uint8Array(await response.arrayBuffer());
-      const saved = /filename="([^"]+)"/.exec(response.headers.get("content-disposition") ?? "");
-      name = saved ? saved[1] : decodeURIComponent(url.split("/").pop());
+      // The name as written (RFC 5987 filename*) first, then the ASCII one.
+      const disposition = response.headers.get("content-disposition") ?? "";
+      const written = /filename\*=UTF-8''([^;]+)/i.exec(disposition);
+      const saved = /filename="([^"]+)"/.exec(disposition);
+      try { name = written ? decodeURIComponent(written[1].trim()) : null; } catch (_) { name = null; }
+      name ??= saved ? saved[1] : decodeURIComponent(url.split("/").pop());
       if (own) revision = response.headers.get("x-project-revision");
     }
   } catch (_) { /* start empty */ }

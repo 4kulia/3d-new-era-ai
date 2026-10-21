@@ -68,6 +68,43 @@ pub(crate) struct Held {
     /// Counts the cloud projects bound, so an answer for one bound before is
     /// told from one for the project bound now.
     bound: u32,
+    /// The account's projects on the service, listed, opened and made from
+    /// the File menu.
+    server: Server,
+}
+
+/// Listing, opening and making the account's projects on the service.
+#[derive(Debug, Default)]
+struct Server {
+    /// The projects as last listed; `None` while they are being fetched.
+    list: Option<Result<Vec<crate::server_projects::ServerProject>, String>>,
+    /// Counts what was asked to open or make, so an answer to something the
+    /// window gave up on opens nothing.
+    asked: u32,
+    /// What was asked, while it is under way.
+    busy: Option<u32>,
+    /// Why the last attempt to open or make one failed.
+    error: Option<String>,
+    /// A project fetched for the window to open.
+    arrived: Option<(u32, Arrived)>,
+}
+
+/// What the window shows of the account's projects on the service.
+#[derive(Debug, Clone)]
+pub(crate) struct ServerView {
+    pub(crate) list: Option<Result<Vec<crate::server_projects::ServerProject>, String>>,
+    pub(crate) busy: bool,
+    pub(crate) error: Option<String>,
+}
+
+/// A project of the account's, fetched from the service to be opened and
+/// bound to its address there.
+#[derive(Debug)]
+pub(crate) struct Arrived {
+    pub(crate) url: String,
+    pub(crate) name: String,
+    pub(crate) bytes: Vec<u8>,
+    pub(crate) revision: i64,
 }
 
 /// A project this tab opened from the account's cloud, and how saving it
@@ -91,6 +128,7 @@ pub(crate) enum Said {
     /// Somebody saved the project since this tab loaded it: this tab's own
     /// state went down as a backup, and this is the service's copy to open.
     Reload {
+        url: String,
         name: String,
         bytes: Vec<u8>,
         revision: i64,
@@ -126,12 +164,20 @@ pub(crate) type Shared = Rc<RefCell<Held>>;
 
 /// The relay this tab should use.
 fn relay_base() -> String {
-    let from_address = web_sys::window()
+    service().unwrap_or_else(|| RELAY.to_owned())
+}
+
+/// The service the address bar names (`?relay=`): the one this editor is
+/// served for, which keeps the account's projects. None when the editor was
+/// opened without one — then it is nobody's in particular, and the File menu
+/// offers no projects on a server.
+pub(crate) fn service() -> Option<String> {
+    web_sys::window()
         .and_then(|w| w.location().search().ok())
         .and_then(|search| web_sys::UrlSearchParams::new_with_str(&search).ok())
         .and_then(|params| params.get("relay"))
-        .filter(|value| !value.trim().is_empty());
-    from_address.unwrap_or_else(|| RELAY.to_owned())
+        .map(|value| value.trim().trim_end_matches('/').to_owned())
+        .filter(|value| !value.is_empty())
 }
 
 /// Closes the address. Whoever held it loses the tab at once — the socket is
@@ -307,6 +353,14 @@ pub(crate) fn check_account(state: &Shared, ctx: &eframe::egui::Context) {
     if !matches!(state.borrow().link, Link::On { .. }) {
         return;
     }
+    // Only the tab on screen takes the room (and with it the active
+    // project): a tab being hidden must not race the one being shown.
+    if web_sys::window()
+        .and_then(|w| w.document())
+        .is_some_and(|d| d.hidden())
+    {
+        return;
+    }
     let (state, ctx) = (state.clone(), ctx.clone());
     wasm_bindgen_futures::spawn_local(async move {
         let base = kept.relay.clone();
@@ -334,6 +388,11 @@ pub(crate) fn check_account(state: &Shared, ctx: &eframe::egui::Context) {
             if !claimed {
                 web_sys::console::warn_1(&"could not hand this tab to the account".into());
             }
+        }
+        // Whoever holds the room says which project the account works on.
+        let bound = state.borrow().cloud.as_ref().map(|c| c.url.clone());
+        if claimed && let Some(url) = bound {
+            tell_active(&url).await;
         }
         let mut held = state.borrow_mut();
         held.account = account;
@@ -713,7 +772,7 @@ fn hold(
 
 /// The cloud project the address bar opened (`?project=`), when it is one
 /// of the account's at this tab's service.
-fn cloud_url() -> Option<String> {
+pub(crate) fn cloud_url() -> Option<String> {
     let url = web_sys::window()
         .and_then(|w| w.location().search().ok())
         .and_then(|search| web_sys::UrlSearchParams::new_with_str(&search).ok())
@@ -722,17 +781,19 @@ fn cloud_url() -> Option<String> {
         .then_some(url)
 }
 
-/// The document is now the cloud project the address bar opened, named
-/// `name`, at the service's `revision`: from here on, while the account holds
-/// this tab's room, it is saved back after each change.
-pub(crate) fn bind(state: &Shared, name: &str, revision: i64, document_revision: u64) {
-    let Some(url) = cloud_url() else {
-        return;
-    };
+/// The document is now the cloud project at `url`, named `name`, at the
+/// service's `revision`: from here on, while the account holds this tab's
+/// room, it is saved back after each change. The service is told so, and
+/// makes it the account's active project: the one its AI works on when no
+/// tab holds the room, and the one its renders are of.
+pub(crate) fn bind(state: &Shared, url: &str, name: &str, revision: i64, document_revision: u64) {
+    let active = url.to_owned();
+    wasm_bindgen_futures::spawn_local(async move { tell_active(&active).await });
+    show_in_address(url);
     let mut held = state.borrow_mut();
     held.bound += 1;
     held.cloud = Some(Cloud {
-        url,
+        url: url.to_owned(),
         name: name.to_owned(),
         serial: held.bound,
         saver: crate::autosave::Autosave::new(revision, document_revision, js_sys::Date::now()),
@@ -741,9 +802,29 @@ pub(crate) fn bind(state: &Shared, name: &str, revision: i64, document_revision:
     });
 }
 
-/// The document is no longer the cloud project: nothing is saved back.
+/// The document is no longer the cloud project: nothing is saved back, and
+/// the address bar names the service alone, so a reload does not open the
+/// cloud project over what is on screen.
 pub(crate) fn unbind(state: &Shared) {
-    state.borrow_mut().cloud = None;
+    let was = state.borrow_mut().cloud.take();
+    if was.is_some() {
+        show_service_only();
+    }
+}
+
+/// Makes the account's project at `url` its active one: the one its AI
+/// works on when no tab holds the room, and the one its renders are of.
+async fn tell_active(url: &str) {
+    let active = crate::server_projects::active_url(url);
+    if !matches!(with_cookie(&active, Some("{}")).await, Ok((204, _))) {
+        web_sys::console::warn_1(&"could not make this project the account's active one".into());
+    }
+}
+
+/// Whether the service said who is signed in, or that nobody is: then it
+/// is one with accounts, and their projects.
+pub(crate) fn account_known(state: &Shared) -> bool {
+    !matches!(state.borrow().account, Account::Unknown)
 }
 
 /// Saves the cloud project back when it is due, and answers what the window
@@ -976,6 +1057,7 @@ async fn keep_and_reload(
     match fetched {
         Ok((name, bytes, revision)) => {
             cloud.said = Some(Said::Reload {
+                url: url.to_owned(),
                 name,
                 bytes,
                 revision,
@@ -1035,11 +1117,7 @@ async fn get_project(url: &str) -> Result<(String, Vec<u8>, i64), String> {
         .and_then(|r| r.parse().ok())
         .ok_or("the service sent no revision")?;
     let name = header("content-disposition")
-        .and_then(|d| {
-            d.split("filename=\"")
-                .nth(1)
-                .map(|n| n.trim_end_matches('"').to_owned())
-        })
+        .and_then(|d| crate::server_projects::file_name(&d))
         .unwrap_or_else(|| "projeto.newera".to_owned());
     let buffer =
         wasm_bindgen_futures::JsFuture::from(response.array_buffer().map_err(|e| told(&e))?)
@@ -1056,6 +1134,179 @@ async fn fetch(url: &str, options: &web_sys::RequestInit) -> Result<web_sys::Res
         .map_err(|e| told(&e))?
         .dyn_into::<web_sys::Response>()
         .map_err(|_| "an odd answer".to_owned())
+}
+
+/// What the window shows of the account's projects on the service.
+pub(crate) fn server_view(state: &Shared) -> ServerView {
+    let held = state.borrow();
+    ServerView {
+        list: held.server.list.clone(),
+        busy: held.server.busy.is_some(),
+        error: held.server.error.clone(),
+    }
+}
+
+/// Lists the account's projects on the service again; `server_view` has
+/// them once they come.
+pub(crate) fn list_projects(state: &Shared) {
+    let Some(service) = service() else {
+        return;
+    };
+    {
+        let mut held = state.borrow_mut();
+        held.server.list = None;
+        held.server.error = None;
+    }
+    let state = state.clone();
+    wasm_bindgen_futures::spawn_local(async move {
+        let list = match with_cookie(&format!("{service}/account/projects"), None).await {
+            Ok((200, text)) => crate::server_projects::parse_list(&text),
+            Ok((401, _)) => Err(crate::i18n::tr(
+                "Entre na sua conta para ver os projetos do servidor.",
+            )
+            .to_owned()),
+            Ok((status, text)) => Err(crate::server_projects::refusal(status, &text)),
+            Err(why) => Err(why),
+        };
+        state.borrow_mut().server.list = Some(list);
+    });
+}
+
+/// Fetches the account's project `id` from the service, for the window to
+/// open (`take_arrived`).
+/// It opens under `name`, as listed.
+pub(crate) fn open_project(state: &Shared, id: &str, name: &str) {
+    let Some(service) = service() else {
+        return;
+    };
+    let url = crate::server_projects::project_url(&service, id);
+    let name = name.to_owned();
+    let asked = ask(state);
+    let state = state.clone();
+    wasm_bindgen_futures::spawn_local(async move {
+        let fetched = fetch_arrived(url, &name).await;
+        answered(&state, asked, fetched);
+    });
+}
+
+/// Makes a project named `name` on the service, then fetches it like any
+/// other, for the window to open (`take_arrived`).
+pub(crate) fn make_project(state: &Shared, name: &str) {
+    let Some(service) = service() else {
+        return;
+    };
+    let body = crate::server_projects::new_body(name);
+    let asked = ask(state);
+    let state = state.clone();
+    wasm_bindgen_futures::spawn_local(async move {
+        let made = match with_cookie(&format!("{service}/account/projects"), Some(&body)).await {
+            Ok((201, text)) => crate::server_projects::parse_made(&text),
+            Ok((status, text)) => Err(crate::server_projects::refusal(status, &text)),
+            Err(why) => Err(why),
+        };
+        let fetched = match made {
+            Ok((id, name)) => {
+                fetch_arrived(crate::server_projects::project_url(&service, &id), &name).await
+            }
+            Err(why) => Err(why),
+        };
+        answered(&state, asked, fetched);
+    });
+}
+
+/// Nothing asked of the service is opened any more: the window gave up on it.
+pub(crate) fn forget_asked(state: &Shared) {
+    let mut held = state.borrow_mut();
+    held.server.asked += 1;
+    held.server.busy = None;
+    held.server.error = None;
+    held.server.arrived = None;
+}
+
+/// The project fetched for the window to open, once, if it still wants it.
+pub(crate) fn take_arrived(state: &Shared) -> Option<Arrived> {
+    let mut held = state.borrow_mut();
+    let asked = held.server.asked;
+    match held.server.arrived.take() {
+        Some((at, arrived)) if at == asked => Some(arrived),
+        _ => None,
+    }
+}
+
+/// Writes the project at `url` into the address bar, as a link to it would
+/// have it: a reload opens it again, bound to the service.
+fn show_in_address(url: &str) {
+    if let Some(service) = service() {
+        replace_query(&crate::server_projects::editor_query(url, &service));
+    }
+}
+
+/// Leaves only the service in the address bar.
+fn show_service_only() {
+    if let Some(service) = service() {
+        replace_query(&crate::server_projects::service_query(&service));
+    }
+}
+
+fn replace_query(query: &str) {
+    let Some(window) = web_sys::window() else {
+        return;
+    };
+    let path = window.location().pathname().unwrap_or_default();
+    if let Ok(history) = window.history() {
+        let _ = history.replace_state_with_url(&JsValue::NULL, "", Some(&format!("{path}{query}")));
+    }
+}
+
+/// When a project last changed, `updated_at` seconds since the epoch, as
+/// the browser writes a date and time in the window's language.
+pub(crate) fn when(updated_at: i64) -> String {
+    #[allow(
+        clippy::cast_precision_loss,
+        reason = "milliseconds since 1970 fit an f64 exactly"
+    )]
+    let ms = (updated_at as f64) * 1000.0;
+    js_sys::Date::new(&JsValue::from_f64(ms))
+        .to_locale_string(crate::i18n::lang().tag(), &JsValue::UNDEFINED)
+        .into()
+}
+
+/// A new request to open or make a project: whatever was asked before is
+/// given up on.
+fn ask(state: &Shared) -> u32 {
+    let mut held = state.borrow_mut();
+    held.server.asked += 1;
+    held.server.busy = Some(held.server.asked);
+    held.server.error = None;
+    held.server.arrived = None;
+    held.server.asked
+}
+
+/// Books the answer to request `asked`, unless the window asked something
+/// else since.
+fn answered(state: &Shared, asked: u32, fetched: Result<Arrived, String>) {
+    let mut held = state.borrow_mut();
+    if held.server.asked != asked {
+        return;
+    }
+    held.server.busy = None;
+    match fetched {
+        Ok(arrived) => held.server.arrived = Some((asked, arrived)),
+        Err(why) => held.server.error = Some(why),
+    }
+}
+
+/// The project at `url`, fetched the way `index.html` fetches a `?project=`
+/// link to the service, with its revision; named `name` as the service
+/// lists it.
+async fn fetch_arrived(url: String, name: &str) -> Result<Arrived, String> {
+    let (_, bytes, revision) = get_project(&url).await?;
+    Ok(Arrived {
+        url,
+        name: format!("{name}.newera"),
+        bytes,
+        revision,
+    })
 }
 
 /// Runs one tool in this tab's project.

@@ -62,6 +62,14 @@ pub(crate) enum Dialog {
         /// Which client's snippet is on show.
         client: usize,
     },
+    /// The account's projects on the service, to open one.
+    #[cfg(target_arch = "wasm32")]
+    ServerProjects,
+    /// The name of a new project on the service.
+    #[cfg(target_arch = "wasm32")]
+    NewServerProject {
+        name: String,
+    },
 }
 
 /// Type and side finishes being edited for one or more walls. Values start
@@ -1365,6 +1373,10 @@ pub(crate) fn show(app: &mut NewEraApp, ctx: &egui::Context, dialog: Dialog) -> 
                 DialogOutcome::Keep(Dialog::ConnectAi { client })
             }
         }
+        #[cfg(target_arch = "wasm32")]
+        Dialog::ServerProjects => server_projects(app, ctx),
+        #[cfg(target_arch = "wasm32")]
+        Dialog::NewServerProject { name } => new_server_project(app, ctx, name),
         Dialog::Help => {
             let mut close = false;
             crate::theme::modal(ctx, egui::Id::new("help")).show(ctx, |ui| {
@@ -1449,6 +1461,129 @@ pub(crate) fn show(app: &mut NewEraApp, ctx: &egui::Context, dialog: Dialog) -> 
                 DialogOutcome::Keep(Dialog::Help)
             }
         }
+    }
+}
+
+/// The account's projects on the service: each opens on a click, the way a
+/// link to it opens it.
+#[cfg(target_arch = "wasm32")]
+fn server_projects(app: &mut NewEraApp, ctx: &egui::Context) -> DialogOutcome {
+    let view = crate::ai_web::server_view(&app.ai_link);
+    let (mut close, mut open, mut again) = (false, None, false);
+    crate::theme::modal(ctx, egui::Id::new("server-projects")).show(ctx, |ui| {
+        ui.set_min_width(460.0);
+        crate::theme::title(
+            ui,
+            &format!(
+                "{} {}",
+                icon::CLOUD_ARROW_DOWN,
+                crate::i18n::tr("Projetos no servidor")
+            ),
+        );
+        match &view.list {
+            None => {
+                ui.horizontal(|ui| {
+                    ui.spinner();
+                    ui.label(crate::i18n::tr("Carregando os projetos…"));
+                });
+            }
+            Some(Err(why)) => {
+                ui.label(crate::i18n::fill(
+                    "⚠ Não foi possível listar os projetos: {}",
+                    &[why],
+                ));
+                again = ui.button(crate::i18n::tr("Tentar de novo")).clicked();
+            }
+            Some(Ok(list)) if list.is_empty() => {
+                ui.label(crate::i18n::tr("Nenhum projeto no servidor ainda."));
+            }
+            Some(Ok(list)) => {
+                egui::ScrollArea::vertical()
+                    .max_height(360.0)
+                    .show(ui, |ui| {
+                        grid(ui, "server-projects", |ui| {
+                            ui.label(crate::i18n::tr("Nome"));
+                            ui.label(crate::i18n::tr("Última alteração"));
+                            ui.end_row();
+                            for project in list {
+                                if ui
+                                    .add_enabled(!view.busy, egui::Button::new(&project.name))
+                                    .clicked()
+                                {
+                                    open = Some((project.id.clone(), project.name.clone()));
+                                }
+                                ui.label(crate::ai_web::when(project.updated_at));
+                                ui.end_row();
+                            }
+                        });
+                    });
+            }
+        }
+        if view.busy {
+            ui.horizontal(|ui| {
+                ui.spinner();
+                ui.label(crate::i18n::tr("Abrindo projeto"));
+            });
+        }
+        if let Some(why) = &view.error {
+            ui.label(crate::i18n::fill("⚠ O servidor recusou: {}", &[why]));
+        }
+        crate::theme::footer(ui, |ui| {
+            if crate::theme::secondary(ui, crate::i18n::tr("Fechar")).clicked() {
+                close = true;
+            }
+        });
+    });
+    if view.busy || view.list.is_none() {
+        ctx.request_repaint_after(std::time::Duration::from_millis(100));
+    }
+    if close || ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+        crate::ai_web::forget_asked(&app.ai_link);
+        return DialogOutcome::Close;
+    }
+    if again {
+        crate::ai_web::list_projects(&app.ai_link);
+    }
+    if let Some((id, name)) = open {
+        crate::ai_web::open_project(&app.ai_link, &id, &name);
+    }
+    DialogOutcome::Keep(Dialog::ServerProjects)
+}
+
+/// A name for a new project on the service, which opens once it is made.
+#[cfg(target_arch = "wasm32")]
+fn new_server_project(app: &mut NewEraApp, ctx: &egui::Context, mut name: String) -> DialogOutcome {
+    let view = crate::ai_web::server_view(&app.ai_link);
+    let answer = modal(ctx, crate::i18n::tr("Novo projeto no servidor"), |ui| {
+        grid(ui, "new-server-project", |ui| {
+            ui.label(crate::i18n::tr("Nome do projeto"));
+            ui.add_enabled(!view.busy, egui::TextEdit::singleline(&mut name))
+                .request_focus();
+            ui.end_row();
+        });
+        if view.busy {
+            ui.horizontal(|ui| {
+                ui.spinner();
+                ui.label(crate::i18n::tr("Criando o projeto…"));
+            });
+        }
+        if let Some(why) = &view.error {
+            ui.label(crate::i18n::fill("⚠ O servidor recusou: {}", &[why]));
+        }
+    });
+    if view.busy {
+        ctx.request_repaint_after(std::time::Duration::from_millis(100));
+    }
+    match answer {
+        Some(true) if !view.busy && !name.trim().is_empty() => {
+            crate::ai_web::make_project(&app.ai_link, &name);
+            DialogOutcome::Keep(Dialog::NewServerProject { name })
+        }
+        Some(false) => {
+            crate::ai_web::forget_asked(&app.ai_link);
+            DialogOutcome::Close
+        }
+        _ => DialogOutcome::Keep(Dialog::NewServerProject { name }),
     }
 }
 
