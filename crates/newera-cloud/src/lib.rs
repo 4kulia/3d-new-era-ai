@@ -63,10 +63,12 @@ impl AppState {
             .user_agent(concat!("3d-new-era-ai/", env!("CARGO_PKG_VERSION")))
             .build()
             .expect("an HTTP client");
+        // The editor this service names is let into the relay too.
+        let rooms = newera_relay::Rooms::allowing(config.site_origins.clone());
         Self {
             config: Arc::new(config),
             db,
-            rooms: newera_relay::Rooms::default(),
+            rooms,
             http,
             limits: limits::Limiter::default(),
             engine,

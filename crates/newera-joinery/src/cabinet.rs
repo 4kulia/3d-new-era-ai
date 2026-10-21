@@ -1681,7 +1681,7 @@ mod tests {
             ..CabinetParams::default()
         })
         .unwrap();
-        assert!(handles(&push).is_empty());
+        assert_eq!(handles(&push), [] as [&Part; 0]);
         assert!(
             push.hardware
                 .iter()

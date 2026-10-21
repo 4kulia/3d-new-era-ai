@@ -617,7 +617,7 @@ mod tests {
         assert!(!run["modules"].as_array().unwrap().is_empty(), "{run}");
         let doc = s.document.read();
         let home = doc.home();
-        assert!(!home.furniture.is_empty());
+        assert_ne!(home.furniture, [] as [newera_core::Furniture; 0]);
         for piece in &home.furniture {
             assert_eq!(
                 home.resolve_level(piece.level),

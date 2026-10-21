@@ -1109,7 +1109,7 @@ mod tests {
             .filter(|l| l.properties.contains_key(electrical::RUN_KEY))
             .cloned()
             .collect();
-        assert!(!drawn.is_empty());
+        assert_ne!(drawn, [] as [newera_core::Polyline; 0]);
         assert!(
             drawn
                 .iter()

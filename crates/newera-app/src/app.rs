@@ -3713,7 +3713,10 @@ mod variant_tests {
         h.key_press_modifiers(Modifiers::COMMAND, Key::Tab);
         h.run_steps(3);
         assert_eq!(h.state().document.read().active_variant(), 1);
-        assert!(h.state().document.read().home().walls.is_empty());
+        assert_eq!(
+            h.state().document.read().home().walls,
+            [] as [newera_core::Wall; 0]
+        );
     }
 
     #[test]

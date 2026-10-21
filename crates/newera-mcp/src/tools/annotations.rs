@@ -1017,11 +1017,12 @@ mod tests {
         // And notes can be found by their text, which no read could do.
         let found = annotations(r#"{"q":"torre"}"#);
         assert_eq!(found["labels"].as_array().unwrap().len(), 1, "{found}");
-        assert!(
+        assert_eq!(
             annotations(r#"{"q":"varanda"}"#)["labels"]
                 .as_array()
                 .unwrap()
-                .is_empty()
+                .as_slice(),
+            [] as [serde_json::Value; 0]
         );
     }
     #[test]
@@ -1083,7 +1084,7 @@ mod tests {
                 ..RenderParams::default()
             }))
             .unwrap();
-        assert!(!png.content.is_empty());
+        assert_ne!(png.content, [] as [rmcp::model::ContentBlock; 0]);
     }
     /// The note that lies is a legend beside its cabinet, not on it: the one
     /// a joiner reads to cut. Three rounds of a real session were spent

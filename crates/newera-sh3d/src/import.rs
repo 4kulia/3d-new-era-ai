@@ -1352,7 +1352,7 @@ mod tests {
         let bytes = std::fs::read(&path).unwrap();
         let virtual_dir = Path::new("/virtual/sh3d-memory-test");
         let (in_memory, files) = import_bytes(&bytes, "planta", virtual_dir).unwrap();
-        assert!(!files.is_empty());
+        assert_ne!(files, [] as [(std::string::String, std::vec::Vec<u8>); 0]);
         let (mut a, mut b) = (on_disk.home.clone(), in_memory.home.clone());
         a.name.clear();
         b.name.clear();
@@ -1364,7 +1364,7 @@ mod tests {
             .flat_map(|f| f.flatten())
             .filter_map(|f| f.model.clone())
             .collect();
-        assert!(!models.is_empty());
+        assert_ne!(models, [] as [std::string::String; 0]);
         let loaded = models
             .iter()
             .filter(|m| newera_catalog::load_model(&virtual_dir.join(m)).is_ok())
@@ -1403,7 +1403,7 @@ mod tests {
                 assert!(assets.join(model).exists(), "{model} extracted");
             }
         }
-        assert!(!home.walls.is_empty());
+        assert_ne!(home.walls, [] as [newera_core::Wall; 0]);
         let json = newera_core::to_project_json(&newera_core::Document::new(home.clone()));
         println!("project json: {} KB", json.len() / 1024);
         std::fs::remove_dir_all(assets).ok();

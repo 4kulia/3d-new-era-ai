@@ -188,6 +188,20 @@ struct Held {
     /// When each address last opened rooms, to keep one from opening all of
     /// them. Trimmed as it is read; nothing is kept for longer than an hour.
     asked: HashMap<String, Vec<Instant>>,
+    /// Where else this deployment serves the editor, beside `ORIGINS`.
+    origins: Vec<String>,
+}
+
+impl Rooms {
+    /// No rooms yet, and the editor also served from `origins`: a deployment
+    /// of its own names where its editor lives.
+    #[must_use]
+    pub fn allowing(origins: impl IntoIterator<Item = String>) -> Self {
+        Self(Arc::new(Mutex::new(Held {
+            origins: origins.into_iter().collect(),
+            ..Held::default()
+        })))
+    }
 }
 
 /// Compares two secrets without telling anyone, through timing, how much of
@@ -356,12 +370,19 @@ pub fn router() -> Router {
 }
 
 /// The same, over rooms you already hold (the tests want to look inside).
+///
+/// # Panics
+///
+/// When the rooms' lock was poisoned by a thread that panicked holding it.
 pub fn router_with(rooms: Rooms) -> Router {
     // Only the editor's own pages may ask a browser to call this; everything
     // else is a script, and a script has no business opening rooms for a tab
     // that is not there. The secrets are the lock — this is the outer door.
+    let extra = rooms.0.lock().expect("rooms").origins.clone();
     let origins = ORIGINS
         .iter()
+        .copied()
+        .chain(extra.iter().map(String::as_str))
         .filter_map(|origin| origin.parse::<axum::http::HeaderValue>().ok())
         .collect::<Vec<_>>();
     let cors = tower_http::cors::CorsLayer::new()
@@ -451,11 +472,11 @@ async fn tab_socket(
     let origin = headers
         .get(axum::http::header::ORIGIN)
         .and_then(|v| v.to_str().ok());
-    if !from_the_editor(origin) {
-        return (StatusCode::FORBIDDEN, "not from here").into_response();
-    }
     {
         let mut held = rooms.0.lock().expect("rooms");
+        if !from_the_editor(origin, &held.origins) {
+            return (StatusCode::FORBIDDEN, "not from here").into_response();
+        }
         let Some(entry) = held.rooms.get_mut(&room) else {
             return (StatusCode::NOT_FOUND, "no such room").into_response();
         };
@@ -472,8 +493,8 @@ async fn tab_socket(
 /// A handshake is not a fetch: the browser sends it whatever CORS says, so the
 /// gate has to be here. Something with no origin at all is not a browser — a
 /// script, a check, somebody's own tool — and for those the key is the lock.
-fn from_the_editor(origin: Option<&str>) -> bool {
-    origin.is_none_or(|origin| ORIGINS.contains(&origin))
+fn from_the_editor(origin: Option<&str>, extra: &[String]) -> bool {
+    origin.is_none_or(|origin| ORIGINS.contains(&origin) || extra.iter().any(|e| e == origin))
 }
 
 /// Pumps one tab's socket: work down, answers up, until it goes away.
@@ -1110,16 +1131,25 @@ mod tests {
     /// WebSocket handshake, so the origin is checked where it arrives.
     #[test]
     fn a_socket_from_somewhere_else_is_refused() {
-        assert!(from_the_editor(Some("https://3dneweraai.com")));
-        assert!(from_the_editor(Some("http://127.0.0.1:8801")));
-        assert!(!from_the_editor(Some("https://evil.example")));
+        assert!(from_the_editor(Some("https://3dneweraai.com"), &[]));
+        assert!(from_the_editor(Some("http://127.0.0.1:8801"), &[]));
+        assert!(!from_the_editor(Some("https://evil.example"), &[]));
         assert!(
-            !from_the_editor(Some("https://3dneweraai.com.evil.example")),
+            !from_the_editor(Some("https://3dneweraai.com.evil.example"), &[]),
             "a name that merely starts the same is somewhere else"
         );
         assert!(
-            from_the_editor(None),
+            from_the_editor(None, &[]),
             "not a browser: the key is the lock there"
+        );
+        let own = ["https://editor.example".to_owned()];
+        assert!(
+            from_the_editor(Some("https://editor.example"), &own),
+            "a deployment's own editor is let in"
+        );
+        assert!(
+            !from_the_editor(Some("https://editor.example.evil.example"), &own),
+            "and only that origin, not a name that starts the same"
         );
     }
 

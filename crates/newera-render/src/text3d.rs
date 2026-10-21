@@ -193,7 +193,7 @@ mod tests {
         let two = text_triangles("a\nb", 20.0, 0.0);
         let top = two.iter().flatten().map(|p| p[1]).fold(f32::MIN, f32::max);
         assert!(top > 25.0, "first line is above the last: {top}");
-        assert!(text_triangles("", 20.0, 0.0).is_empty());
-        assert!(text_triangles("   ", 20.0, 0.0).is_empty());
+        assert_eq!(text_triangles("", 20.0, 0.0), [] as [[[f32; 2]; 3]; 0]);
+        assert_eq!(text_triangles("   ", 20.0, 0.0), [] as [[[f32; 2]; 3]; 0]);
     }
 }

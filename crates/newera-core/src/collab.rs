@@ -335,7 +335,7 @@ mod tests {
         sessions.expire(32_000);
         assert_eq!(sessions.list().len(), 1);
         assert!(sessions.leave("s1"));
-        assert!(sessions.list().is_empty());
+        assert_eq!(sessions.list(), []);
         let json = serde_json::to_value(sessions.join("Caio", 0)).unwrap();
         assert_eq!(json["name"], "Caio");
         assert!(json.get("cursor").is_none());

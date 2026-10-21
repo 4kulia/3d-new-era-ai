@@ -2788,7 +2788,10 @@ mod tests {
             .map_or_else(|| panic!("{live:#?}"), |f| f.key.clone());
         home.accepted
             .insert(key.clone(), "baixo de propósito".into());
-        assert!(orphaned(&home, &Profile::default()).is_empty());
+        assert_eq!(
+            orphaned(&home, &Profile::default()),
+            [] as [(std::string::String, std::string::String); 0]
+        );
         home.furniture.clear();
         assert_eq!(
             orphaned(&home, &Profile::default()),
@@ -2853,7 +2856,7 @@ mod tests {
                 .iter()
                 .filter(|f| f.discipline() == discipline)
                 .collect();
-            assert!(!findings.is_empty());
+            assert_ne!(findings, [] as [&Finding; 0]);
             assert!(
                 findings
                     .iter()
@@ -3328,23 +3331,23 @@ mod tests {
         );
         let mut open = home.clone();
         open.walls.clear();
-        assert!(corners::review(&Scene::new(&open)).is_empty());
+        assert_eq!(corners::review(&Scene::new(&open)), [] as [Finding; 0]);
         let mut aisle = home.clone();
         aisle.furniture[1].position.y = 200.0;
-        assert!(corners::review(&Scene::new(&aisle)).is_empty());
+        assert_eq!(corners::review(&Scene::new(&aisle)), [] as [Finding; 0]);
         let mut filled = home.clone();
         filled
             .furniture
             .push(piece(22, "box", (453.0, 46.25), (79.0, 77.5, 80.0), 0.0));
-        assert!(corners::review(&Scene::new(&filled)).is_empty());
+        assert_eq!(corners::review(&Scene::new(&filled)), [] as [Finding; 0]);
         let mut raised = home.clone();
         raised.furniture[0].elevation = 150.0;
-        assert!(corners::review(&Scene::new(&raised)).is_empty());
+        assert_eq!(corners::review(&Scene::new(&raised)), [] as [Finding; 0]);
         let mut access = home.clone();
         let mut door = piece(22, "door", (455.0, 0.0), (70.0, 15.0, 210.0), 0.0);
         door.opening = Some(newera_core::Opening::default());
         access.furniture.push(door);
-        assert!(corners::review(&Scene::new(&access)).is_empty());
+        assert_eq!(corners::review(&Scene::new(&access)), [] as [Finding; 0]);
         for angle in [90.0_f64, 33.0] {
             let (sin, cos) = angle.to_radians().sin_cos();
             let rotate = |p: Point2| Point2::new(p.x * cos - p.y * sin, p.x * sin + p.y * cos);

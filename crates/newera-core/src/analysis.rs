@@ -1569,10 +1569,16 @@ mod tests {
         );
         assert!(all.iter().all(|i| !i.is_defect()));
         // Only one storey at a time: nothing to report.
-        assert!(check_layout_in(&layered, Storeys::One(LevelId(2))).is_empty());
+        assert_eq!(
+            check_layout_in(&layered, Storeys::One(LevelId(2))),
+            [] as [crate::analysis::Issue; 0]
+        );
         // Marking the traced plan as a reference drops it from `All` too.
         layered.levels[0].set_reference(true);
-        assert!(check_layout_in(&layered, Storeys::All).is_empty());
+        assert_eq!(
+            check_layout_in(&layered, Storeys::All),
+            [] as [crate::analysis::Issue; 0]
+        );
         assert_eq!(layered.stacked_levels(), Vec::new());
     }
 

@@ -842,13 +842,13 @@ mod tests {
         home.selected_level = Some(LevelId(2));
         assert_eq!(photo_lights(&home).len(), 1);
         home.hidden_layers.push(PlanLayer::Lighting);
-        assert!(photo_lights(&home).is_empty());
+        assert_eq!(photo_lights(&home), [] as [crate::photo::PointLight; 0]);
         home.show_all_in_3d = true;
         assert_eq!(photo_lights(&home).len(), 1);
         home.show_all_in_3d = false;
         home.hidden_layers.clear();
         home.hidden_disciplines.push(Discipline::Electrical);
-        assert!(photo_lights(&home).is_empty());
+        assert_eq!(photo_lights(&home), [] as [crate::photo::PointLight; 0]);
         home.hidden_disciplines.clear();
         home.furniture[0].discipline = Some(Discipline::Plumbing);
         home.hidden_disciplines.push(Discipline::Plumbing);
@@ -916,13 +916,13 @@ mod tests {
             assert_eq!(emitters[0].source, FurnitureId(1));
             assert_eq!(photo_lights(&home), before, "{kind} changed when grouped");
             home.furniture[0].children[0].children[0].visible = false;
-            assert!(photo_lights(&home).is_empty());
+            assert_eq!(photo_lights(&home), [] as [crate::photo::PointLight; 0]);
             home.furniture[0].children[0].children[0].visible = true;
             home.furniture[0].children[0].visible = false;
-            assert!(photo_lights(&home).is_empty());
+            assert_eq!(photo_lights(&home), [] as [crate::photo::PointLight; 0]);
             home.furniture[0].children[0].visible = true;
             home.furniture[0].visible = false;
-            assert!(photo_lights(&home).is_empty());
+            assert_eq!(photo_lights(&home), [] as [crate::photo::PointLight; 0]);
         }
     }
 

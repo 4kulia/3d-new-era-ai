@@ -1650,7 +1650,7 @@ mod tests {
         )
         .unwrap_err();
         assert!(err.contains("no space enclosed"));
-        assert!(doc.home().walls.is_empty());
+        assert_eq!(doc.home().walls, [] as [newera_core::Wall; 0]);
     }
 
     #[test]
@@ -1689,7 +1689,7 @@ mod tests {
 
         let (end, welded) = make(true);
         assert_eq!(end, Point2::new(200.0, 10.5), "exact keeps the point given");
-        assert!(welded.is_empty());
+        assert_eq!(welded, [] as [std::string::String; 0]);
     }
 
     #[test]

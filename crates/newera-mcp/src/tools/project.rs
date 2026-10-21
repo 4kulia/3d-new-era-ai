@@ -721,7 +721,10 @@ mod tests {
             .unwrap();
         assert!(reply.ends_with("casa.newera"), "{reply}");
         s.new_home();
-        assert!(s.document.read().home().labels.is_empty());
+        assert_eq!(
+            s.document.read().home().labels,
+            [] as [newera_core::Label; 0]
+        );
         s.open_home(Parameters(OpenParams {
             path: dir.join("casa.newera").display().to_string(),
         }))

@@ -374,7 +374,10 @@ mod tests {
             ))
             .unwrap_err();
         assert!(refused.message.contains("no spot"), "{}", refused.message);
-        assert!(s.document.read().home().furniture.is_empty());
+        assert_eq!(
+            s.document.read().home().furniture,
+            [] as [newera_core::Furniture; 0]
+        );
     }
 
     #[test]

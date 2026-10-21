@@ -313,11 +313,12 @@ mod tests {
         assert_eq!(value["hosts"][0]["width"], 50);
         assert_eq!(value["hosts"][1]["width"], 50);
         home.walls.clear();
-        assert!(
+        assert_eq!(
             opening_measure(&home, &opening)["hosts"]
                 .as_array()
                 .unwrap()
-                .is_empty()
+                .as_slice(),
+            [] as [serde_json::Value; 0]
         );
     }
 

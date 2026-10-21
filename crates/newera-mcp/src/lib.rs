@@ -429,7 +429,7 @@ mod call_tests {
             serde_json::json!({"walls": [{"pts": [[0, 0], [400, 0]]}]}),
         )
         .expect("the wall goes in");
-        assert!(!made.content.is_empty());
+        assert_ne!(made.content, [] as [rmcp::model::ContentBlock; 0]);
         assert_eq!(document.read().home().walls.len(), 1);
 
         let read = super::call(document, "home", serde_json::Value::Null).expect("read back");

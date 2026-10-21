@@ -363,7 +363,7 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         export_mesh(&mesh, &dir.join("casa.glb"), &|_| None).unwrap();
         let loaded = newera_catalog::load_model(&dir.join("casa.glb")).unwrap();
-        assert!(!loaded.mesh.indices.is_empty());
+        assert_ne!(loaded.mesh.indices, [] as [u32; 0]);
         export_mesh(&mesh, &dir.join("casa.obj"), &|_| None).unwrap();
         let loaded = newera_catalog::load_model(&dir.join("casa.obj")).unwrap();
         // 4 m × 3 m house plus walls, in cm after unit detection.

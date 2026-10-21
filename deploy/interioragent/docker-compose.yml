@@ -1,0 +1,63 @@
+# interioragent.dutch-atlas.com on the shared host: newera-cloud, the static
+# web editor and Postgres. Ports bind to 127.0.0.1 only; nginx on the host
+# terminates TLS. TAG and POSTGRES_PASSWORD come from .env beside this file,
+# the application's settings from app.env (both 0600, never in git).
+
+name: interioragent
+
+services:
+  app:
+    image: interioragent-cloud:${TAG:?set TAG in .env}
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:7979:7979"
+    env_file: ./app.env
+    environment:
+      DATABASE_URL: postgres://postgres:${POSTGRES_PASSWORD:?}@postgres:5432/interioragent?sslmode=disable
+      PORT: "7979"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks: [frontend, backend]
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    mem_limit: 8g
+    cpus: 8
+    pids_limit: 512
+
+  editor:
+    image: interioragent-editor:${TAG:?}
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:7978:8080"
+    networks: [frontend]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 256m
+
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: interioragent
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?}
+      POSTGRES_INITDB_ARGS: "--auth-host=scram-sha-256 --auth-local=scram-sha-256 --data-checksums"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    networks: [backend]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d interioragent"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    shm_size: 256mb
+    mem_limit: 1g
+
+volumes:
+  postgres-data:
+
+networks:
+  frontend:
+  backend:
+    internal: true

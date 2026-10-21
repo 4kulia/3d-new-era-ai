@@ -1644,7 +1644,7 @@ mod tests {
                 .unwrap_err();
         assert!(pattern.message.contains("an image"), "{pattern:?}");
         edit(r#"{"action":"material","ids":["f1"],"material":"tecido","clear":true}"#).unwrap();
-        assert!(overrides().is_empty());
+        assert_eq!(overrides(), [] as [newera_core::ModelMaterial; 0]);
         // Back to repeat 1 with nothing else set, no override stays behind.
         edit(r#"{"action":"material","ids":["f1"],"material":"tecido","repeat":2}"#).unwrap();
         edit(r#"{"action":"material","ids":["f1"],"material":"tecido","repeat":1}"#).unwrap();
@@ -1710,12 +1710,12 @@ mod tests {
         edit(r#"{"action":"part","ids":["f1"],"part":"braco_direito","hide":false}"#).unwrap();
         assert_eq!(part("almofada_encosto"), back);
         let doc = s.document.read();
-        assert!(
+        assert_eq!(
             doc.home()
                 .find_piece("f1".parse().unwrap())
                 .unwrap()
-                .model_parts
-                .is_empty()
+                .model_parts,
+            [] as [newera_core::ModelPart; 0]
         );
         drop(doc);
         std::fs::remove_dir_all(dir).unwrap();

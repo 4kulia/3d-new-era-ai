@@ -1067,7 +1067,10 @@ mod tests {
             wall(1, (0.0, 0.0), (400.0, 0.0), 10.0),
             wall(2, (0.0, 4.0), (400.0, 4.0), 10.0),
         ];
-        assert!(weld_ends(&walls, &[WallId(2)]).is_empty());
+        assert_eq!(
+            weld_ends(&walls, &[WallId(2)]),
+            [] as [(crate::ids::WallId, bool, crate::geometry::Point2); 0]
+        );
     }
 
     #[test]
@@ -1088,7 +1091,10 @@ mod tests {
             wall(1, (0.0, 0.0), (400.0, 0.0), 20.0),
             wall(2, (200.0, 4.0), (200.0, 300.0), 10.0),
         ];
-        assert!(weld_ends(&walls, &[WallId(1)]).is_empty());
+        assert_eq!(
+            weld_ends(&walls, &[WallId(1)]),
+            [] as [(crate::ids::WallId, bool, crate::geometry::Point2); 0]
+        );
         assert_eq!(weld_ends(&walls, &[WallId(2)]).len(), 1);
     }
     /// Every plan redraw asks for the outlines, so the junctions have to be

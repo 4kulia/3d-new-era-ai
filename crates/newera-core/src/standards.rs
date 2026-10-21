@@ -2203,6 +2203,6 @@ mod tests {
         );
         assert_eq!(municipal("São Paulo — SP"), Some(sp));
         assert!(municipal("atlantis").is_none());
-        assert!(!cities().is_empty());
+        assert_ne!(cities(), []);
     }
 }

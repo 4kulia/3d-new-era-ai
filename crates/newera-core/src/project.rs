@@ -743,7 +743,7 @@ mod tests {
         let bytes = to_project_bytes(&doc);
         assert!(bytes.len() < to_project_json(&doc).len());
         let (project, files) = project_from_bytes(&bytes).unwrap();
-        assert!(files.is_empty());
+        assert_eq!(files, [] as [(std::string::String, std::vec::Vec<u8>); 0]);
         assert_eq!(project.variants[0].1.walls.len(), 1);
     }
 }

@@ -827,7 +827,7 @@ mod tests {
         );
         for count in 1..=12 {
             let spots = grid_positions(&l, count, 30.0);
-            assert!(!spots.is_empty());
+            assert_ne!(spots, [] as [crate::geometry::Point2; 0]);
             for p in &spots {
                 assert!(inside(&l, *p), "{count}: {p:?} outside");
                 assert!(edge_distance(&l, *p) >= 30.0, "{count}: {p:?} on the edge");
@@ -858,7 +858,10 @@ mod tests {
         // A room too small for the fixture has no spot for it, not a wrong one.
         let closet =
             [(0.0, 0.0), (40.0, 0.0), (40.0, 40.0), (0.0, 40.0)].map(|(x, y)| Point2::new(x, y));
-        assert!(grid_positions(&closet, 1, 30.0).is_empty());
+        assert_eq!(
+            grid_positions(&closet, 1, 30.0),
+            [] as [crate::geometry::Point2; 0]
+        );
         assert_eq!(grid_positions(&closet, 1, 10.0).len(), 1);
     }
 

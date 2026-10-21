@@ -333,7 +333,10 @@ mod tests {
 
         let ground_floor = floor_shapes(&home, Some(LevelId(1)));
         assert_eq!(ground_floor.len(), 1);
-        assert!(ground_floor[0].holes.is_empty());
+        assert_eq!(
+            ground_floor[0].holes,
+            [] as [std::vec::Vec<crate::geometry::Point2>; 0]
+        );
 
         let upper_floor = floor_shapes(&home, Some(LevelId(2)));
         assert_eq!(upper_floor.len(), 1);
@@ -349,7 +352,10 @@ mod tests {
         );
         // A flight built by hand opens it only once it says it is one.
         home.furniture[0].catalog = "group".into();
-        assert!(floor_shapes(&home, Some(LevelId(2)))[0].holes.is_empty());
+        assert_eq!(
+            floor_shapes(&home, Some(LevelId(2)))[0].holes,
+            [] as [std::vec::Vec<crate::geometry::Point2>; 0]
+        );
         home.furniture[0]
             .properties
             .insert(Furniture::ROLE_KEY.into(), "stair".into());

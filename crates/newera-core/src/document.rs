@@ -650,7 +650,7 @@ mod tests {
 
         let empty = doc.add_variant(None, false);
         assert_eq!(doc.variant_infos()[empty].name, "Versão 3");
-        assert!(doc.home().walls.is_empty());
+        assert_eq!(doc.home().walls, [] as [crate::elements::Wall; 0]);
     }
 
     #[test]

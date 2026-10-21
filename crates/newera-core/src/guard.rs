@@ -320,7 +320,7 @@ mod tests {
         glass.furniture[0]
             .properties
             .insert(GLASS_KEY.into(), "laminated".into());
-        assert!(keys(&glass).is_empty());
+        assert_eq!(keys(&glass), [] as [std::string::String; 0]);
 
         // (c) glass closure alone: no guard.
         let mut closed = Home::default();
@@ -359,7 +359,7 @@ mod tests {
             "{k:?}"
         );
         on_wall.walls[0].height = 110.0;
-        assert!(keys(&on_wall).is_empty());
+        assert_eq!(keys(&on_wall), [] as [std::string::String; 0]);
 
         // (d) the common case: a railing and the closure beside it.
         closed

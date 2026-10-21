@@ -421,7 +421,7 @@ fn plan(home: &Home, request: &Request) -> Result<Planned, String> {
     for o in first.obstacles.iter().filter(|o| inside(o)) {
         if let RunBlock::Piece { id, .. } = &o.block
             && !removed.contains(id)
-            && piece(*id).is_some_and(&replaceable)
+            && piece(*id).is_some_and(replaceable)
         {
             removed.push(*id);
         }

@@ -21,6 +21,11 @@ const BMC_PAGE: &str = "newera-test";
 
 /// A fresh database for one test, migrated, and the service on a free port.
 async fn service() -> Option<(String, AppState)> {
+    service_for(vec![SITE.to_owned()]).await
+}
+
+/// The same, with the editor served from `sites`.
+async fn service_for(sites: Vec<String>) -> Option<(String, AppState)> {
     let Ok(admin) = std::env::var("TEST_DATABASE_URL") else {
         eprintln!("TEST_DATABASE_URL not set: skipping");
         return None;
@@ -45,7 +50,7 @@ async fn service() -> Option<(String, AppState)> {
     let config = Config {
         public_url: base.clone(),
         database_url: url,
-        site_origins: vec![SITE.to_owned()],
+        site_origins: sites,
         mail: Mail::Log,
         google: None,
         editor_url: format!("{SITE}/editor/"),
@@ -736,6 +741,50 @@ async fn an_ai_client_is_allowed_in_and_reaches_the_tab() {
         .await
         .unwrap();
     assert_eq!(me.status(), 401);
+}
+
+/// A deployment that serves the editor from its own origin lets that page
+/// hold a tab in the relay, and still refuses any other page.
+#[tokio::test]
+async fn the_editor_of_this_deployment_reaches_the_relay() {
+    use tokio_tungstenite::tungstenite::client::IntoClientRequest as _;
+    let own = "https://editor.example";
+    let Some((base, _state)) = service_for(vec![own.to_owned()]).await else {
+        return;
+    };
+    let opened: Value = client()
+        .post(format!("{base}/rooms"))
+        .header("content-type", "application/json")
+        .body("{}")
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let tab = format!(
+        "ws://{}{}",
+        base.trim_start_matches("http://"),
+        opened["tab_path"].as_str().unwrap()
+    );
+    let from = |origin: &str| {
+        let mut request = tab.as_str().into_client_request().unwrap();
+        request
+            .headers_mut()
+            .insert("origin", origin.parse().unwrap());
+        request
+    };
+    match tokio_tungstenite::connect_async(from("https://elsewhere.example")).await {
+        Err(tokio_tungstenite::tungstenite::Error::Http(response)) => {
+            assert_eq!(response.status().as_u16(), 403, "another page is refused");
+        }
+        other => panic!("another page should get 403, got {other:?}"),
+    }
+    let (socket, response) = tokio_tungstenite::connect_async(from(own))
+        .await
+        .expect("this deployment's editor takes the tab");
+    assert_eq!(response.status().as_u16(), 101);
+    drop(socket);
 }
 
 #[tokio::test]

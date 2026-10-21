@@ -694,16 +694,14 @@ mod tests {
         with_bath.rooms.remove(0);
         with_bath.rooms[0].name = "Quarto decorativo".into();
         with_bath.rooms[0].usage = crate::RoomUse::Bathroom;
-        assert!(
-            suggest(&with_bath, Standard::Wifi6e, Band::G6, 280.0)
-                .0
-                .is_empty()
+        assert_eq!(
+            suggest(&with_bath, Standard::Wifi6e, Band::G6, 280.0).0,
+            [] as [(crate::wifi::AccessPoint, std::string::String); 0]
         );
         with_bath.rooms[0].usage = crate::RoomUse::Bedroom;
-        assert!(
-            !suggest(&with_bath, Standard::Wifi6e, Band::G6, 280.0)
-                .0
-                .is_empty()
+        assert_ne!(
+            suggest(&with_bath, Standard::Wifi6e, Band::G6, 280.0).0,
+            [] as [(crate::wifi::AccessPoint, std::string::String); 0]
         );
 
         let (points, short) = suggest(&masonry, Standard::Wifi6, Band::G5, 280.0);
@@ -809,7 +807,7 @@ mod tests {
         assert_eq!(near.len(), 1);
         assert_eq!(near[0].floors, 1);
         assert!((near[0].z - 510.0).abs() < 1e-9, "{:?}", near[0]);
-        assert!(!coverage(&home, &near).is_empty());
+        assert_ne!(coverage(&home, &near), [] as [crate::wifi::RoomCoverage; 0]);
     }
 
     #[test]

@@ -331,7 +331,7 @@ mod tests {
         }
         assert!(mesh.indices.len() / 3 > 70_000);
         let started = std::time::Instant::now();
-        assert!(clashes(&mesh, 0.05).is_empty());
+        assert_eq!(clashes(&mesh, 0.05), [] as [crate::check::Clash; 0]);
         assert!(started.elapsed().as_secs() < 20, "{:?}", started.elapsed());
     }
 }

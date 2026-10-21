@@ -360,7 +360,7 @@ fn a_glb_is_drawn_with_the_image_inside_it() {
         .unwrap()
         .to_rgba8();
     let drawn: Vec<_> = top.pixels().filter(|p| p[3] > 0).collect();
-    assert!(!drawn.is_empty());
+    assert_ne!(drawn, [] as [&image::Rgba<u8>; 0]);
     assert!(
         drawn.iter().all(|p| p[0] > p[1].saturating_add(80)),
         "the tile shows its red image, not the plain material color"

@@ -1,0 +1,78 @@
+name: Deploy interioragent
+
+# After CI passes on main: build the hosted service and the web editor as two
+# images and stream them, with the compose file, to interioragent.dutch-atlas.com,
+# whose deploy key runs deploy/interioragent/deploy.sh (load, switch, health
+# check, roll back).
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    if: (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push')
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    environment: production
+    concurrency:
+      group: deploy-production
+      cancel-in-progress: false
+    env:
+      SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.SHA }}
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: wasm-bindgen-cli@0.2.128
+      # The site's own build lays out the editor; this deployment serves its
+      # /app/ and the two root files the editor page loads.
+      - name: Build the web editor
+        run: |
+          BUILD_WASM=1 scripts/site-build.sh _site
+          site=deploy/interioragent/editor-site
+          mkdir -p "$site"
+          cp -r _site/app "$site/app"
+          cp _site/demo.newera _site/favicon.svg "$site/"
+      - uses: docker/setup-buildx-action@v4
+      - name: Build the hosted service image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          load: true
+          tags: interioragent-cloud:${{ env.SHA }}
+          cache-from: type=gha,scope=cloud
+          cache-to: type=gha,mode=max,scope=cloud
+      - name: Build the editor image
+        uses: docker/build-push-action@v7
+        with:
+          context: deploy/interioragent
+          file: deploy/interioragent/editor.Dockerfile
+          load: true
+          tags: interioragent-editor:${{ env.SHA }}
+      - name: Hand the images to the host
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+        run: |
+          set -o pipefail
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/deploy && chmod 600 ~/.ssh/deploy
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          bundle="$(mktemp -d)"
+          docker save -o "$bundle/images.tar" "interioragent-cloud:${SHA}" "interioragent-editor:${SHA}"
+          cp deploy/interioragent/docker-compose.yml "$bundle/"
+          tar -czf - -C "$bundle" images.tar docker-compose.yml \
+            | ssh -i ~/.ssh/deploy -o BatchMode=yes -o StrictHostKeyChecking=yes \
+                interioragent-deploy@185.70.186.229 "${SHA}"

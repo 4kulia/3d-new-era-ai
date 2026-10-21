@@ -2042,7 +2042,10 @@ mod stale_tests {
             let check = check_annotations(&home);
             assert!(check.names > 0);
             assert!(check.stale.is_empty(), "{name}: {:?}", check.stale);
-            assert!(check.unverified.is_empty());
+            assert_eq!(
+                check.unverified,
+                [] as [(crate::ids::ElementId, std::string::String); 0]
+            );
         }
     }
 
@@ -2083,7 +2086,7 @@ mod stale_tests {
             let check = check_annotations(&home);
             assert_eq!(check.names, 0);
             assert_eq!(check.unverified.len(), 1);
-            assert!(check.stale.is_empty());
+            assert_eq!(check.stale, [] as [crate::measure::Stale; 0]);
         }
         home.furniture[0].name = "Sanca — 18 × 12 cm".into();
         assert_eq!(check_annotations(&home).unverified.len(), 1);
@@ -2162,7 +2165,13 @@ mod stale_tests {
         let chapa = written_sizes("Chapa 8,5 × 6,5 mm");
         assert!((chapa[0][0] - 0.85).abs() < 1e-9 && (chapa[0][1] - 0.65).abs() < 1e-9);
         // Numbers that are not sizes are left where they are.
-        assert!(written_sizes("Cozinha: corredor 72 cm").is_empty());
-        assert!(written_sizes("53A e 2 portas").is_empty());
+        assert_eq!(
+            written_sizes("Cozinha: corredor 72 cm"),
+            [] as [std::vec::Vec<f64>; 0]
+        );
+        assert_eq!(
+            written_sizes("53A e 2 portas"),
+            [] as [std::vec::Vec<f64>; 0]
+        );
     }
 }

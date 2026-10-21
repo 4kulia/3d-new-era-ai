@@ -804,8 +804,8 @@ mod tests {
                 client.label,
                 client.code
             );
-            assert!(!client.place.is_empty());
-            assert!(!client.note.is_empty());
+            assert_ne!(client.place, "");
+            assert_ne!(client.note, "");
         }
     }
 

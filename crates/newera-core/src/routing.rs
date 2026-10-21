@@ -527,10 +527,9 @@ mod tests {
             "it rises from the floor: {floor:?}"
         );
         let light = t(3, 200.0, 150.0, 270.0);
-        assert!(
-            lay_out(&home, source, &[light], Via::Ceiling, 280.0)
-                .impossible
-                .is_empty()
+        assert_eq!(
+            lay_out(&home, source, &[light], Via::Ceiling, 280.0).impossible,
+            [] as [crate::routing::Terminal; 0]
         );
     }
 

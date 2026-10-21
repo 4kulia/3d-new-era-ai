@@ -156,7 +156,7 @@ mod tests {
         let first = super::client_id_in(&dir).expect("an id");
         let again = super::client_id_in(&dir).expect("the same id");
         assert_eq!(first, again);
-        assert!(!first.is_empty());
+        assert_ne!(first, "");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

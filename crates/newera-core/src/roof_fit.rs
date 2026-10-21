@@ -458,11 +458,11 @@ mod tests {
         );
         away.height = 250.0;
         home.walls.push(away);
-        assert!(
+        assert_eq!(
             fit_commands(&home, &[ElementId::Wall(WallId(30))], 10.0, &mut || WallId(
                 98
-            ))
-            .is_empty()
+            )),
+            [] as [crate::command::Command; 0]
         );
     }
 }
