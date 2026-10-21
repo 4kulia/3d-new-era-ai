@@ -447,10 +447,10 @@ pub fn project_from_bytes(bytes: &[u8]) -> Result<(Project, BundledFiles), Proje
     let mut files = Vec::new();
     for i in 0..archive.len() {
         let mut file = archive.by_index(i)?;
-        if file.is_dir() || file.name() == BUNDLE_JSON {
+        let name = file.name()?.into_owned();
+        if file.is_dir() || name == BUNDLE_JSON {
             continue;
         }
-        let name = file.name().to_owned();
         let mut data = Vec::new();
         std::io::Read::read_to_end(&mut file, &mut data)?;
         files.push((name, data));

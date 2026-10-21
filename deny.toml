@@ -8,6 +8,12 @@ ignore = [
   # Unmaintained notice (not a vulnerability) for a transitive dependency:
   # winit -> sctk-adwaita -> ab_glyph -> ttf-parser. Revisit when winit moves on.
   { id = "RUSTSEC-2026-0192", reason = "transitive via winit; no upgrade available" },
+  # Unmaintained notices for the D-Bus stack of Linux accessibility:
+  # eframe -> egui-winit -> accesskit_winit -> accesskit_unix -> atspi -> zbus/zvariant.
+  # Revisit when accesskit moves off it.
+  { id = "RUSTSEC-2026-0370", reason = "transitive via eframe accesskit; no upgrade available" },
+  { id = "RUSTSEC-2026-0371", reason = "transitive via eframe accesskit; no upgrade available" },
+  { id = "RUSTSEC-2026-0372", reason = "transitive via eframe accesskit; no upgrade available" },
 ]
 
 [licenses]

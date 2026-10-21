@@ -485,8 +485,9 @@ impl<'g> Importer<'g> {
                 let names: Vec<String> = if kind == AssetKind::Model {
                     self.archive
                         .file_names()
+                        .filter_map(Result::ok)
                         .filter(|n| n.starts_with(&format!("{dir}/")) && !n.ends_with('/'))
-                        .map(str::to_owned)
+                        .map(std::borrow::Cow::into_owned)
                         .collect()
                 } else {
                     vec![entry.to_owned()]
@@ -525,7 +526,7 @@ impl<'g> Importer<'g> {
             if file.is_dir() {
                 continue;
             }
-            let name = format!("{entry}.d/{}", file.name());
+            let name = format!("{entry}.d/{}", file.name().map_err(std::io::Error::other)?);
             let mut data = Vec::new();
             file.read_to_end(&mut data)?;
             drop(file);
