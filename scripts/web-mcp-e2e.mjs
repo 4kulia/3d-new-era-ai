@@ -243,18 +243,20 @@ try {
     }
     ok("images ran in disposable workers with progress and a responsive page");
     const oversized = await rpc(mcpUrl, {jsonrpc:'2.0',id:29,method:'tools/call',
-      params:{name:'render_photo',arguments:{w:800,h:600}}});
-    if (!oversized.result?.isError || !JSON.stringify(oversized).includes('307200')
-        || await evaluate('window.renderAudit.workers') !== 4) {
-      throw new Error('small-device budget did not refuse oversized work before starting a worker');
+      params:{name:'render_plan',arguments:{w:800,h:600}}});
+    const reduced = JSON.stringify(oversized);
+    if (oversized.result?.isError || !oversized.result?.content?.some(c=>c.type==='image')
+        || !reduced.includes('requested 800x600, rendered 640x480') || !reduced.includes('307200')
+        || await evaluate('window.renderAudit.workers') !== 5) {
+      throw new Error(`small-device budget did not render oversized work at its limit: ${reduced.slice(0, 300)}`);
     }
-    ok('small-device capabilities limit render size before allocating a worker');
+    ok('small-device capabilities cut an oversized render to the limit and say so');
     // A busy render must leave both ordinary MCP calls and the page usable.
     // Simulate a worker failure to exercise cleanup and the next render.
     const pendingPhoto = rpc(mcpUrl, {jsonrpc:"2.0",id:30,method:"tools/call",
       params:{name:"render_photo",arguments:{w:640,h:480,quality:"best"}}});
     for (let i=0;i<40;i++) {
-      if (await evaluate("window.renderAudit.workers > 4")) break;
+      if (await evaluate("window.renderAudit.workers > 5")) break;
       await sleep(50);
     }
     const busy = await rpc(mcpUrl, {jsonrpc:"2.0",id:31,method:"tools/call",
