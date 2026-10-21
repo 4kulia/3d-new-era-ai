@@ -65,6 +65,10 @@ pub fn safe_return(state: &AppState, return_to: Option<&str>) -> String {
     let Some(target) = return_to.map(str::trim).filter(|t| !t.is_empty()) else {
         return fallback;
     };
+    // Browsers drop tabs and newlines from a URL, so `/<TAB>/evil` is `//evil`.
+    if target.chars().any(|c| c.is_control() || c.is_whitespace()) {
+        return fallback;
+    }
     if target.starts_with('/') && !target.starts_with("//") && !target.contains('\\') {
         return target.to_owned();
     }
@@ -77,6 +81,38 @@ pub fn safe_return(state: &AppState, return_to: Option<&str>) -> String {
     } else {
         fallback
     }
+}
+
+/// The header the proxy names the request it turned away in.
+const ORIGINAL_URI: &str = "x-original-uri";
+
+/// Whether this browser is signed in, for the proxy in front of the editor:
+/// 204 if so, 401 if not, never a body and never kept by a cache.
+pub async fn check(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    let status = if signed_in(&state, &headers).await.is_some() {
+        StatusCode::NO_CONTENT
+    } else {
+        StatusCode::UNAUTHORIZED
+    };
+    (status, [(header::CACHE_CONTROL, "no-store")]).into_response()
+}
+
+/// Where the proxy sends a browser the check turned away: the sign-in page,
+/// which brings it back to the request it was making.
+pub async fn required(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    let asked = headers.get(ORIGINAL_URI).and_then(|v| v.to_str().ok());
+    let back = safe_return(&state, asked);
+    (
+        StatusCode::FOUND,
+        [
+            (
+                header::LOCATION,
+                format!("/login?return_to={}", url_encode(&back)),
+            ),
+            (header::CACHE_CONTROL, "no-store".to_owned()),
+        ],
+    )
+        .into_response()
 }
 
 #[derive(Debug, Deserialize)]

@@ -165,6 +165,12 @@ pub fn router(state: &AppState) -> Router {
         .route("/oauth/revoke", post(oauth::revoke))
         .route("/login", get(login::form).post(login::send))
         .route("/login/link", get(login::confirm).post(login::redeem))
+        // Asked by the proxy in front of the editor: its auth subrequest is
+        // always a GET, whatever the request it guards was.
+        .route("/login/check", axum::routing::any(login::check))
+        // Where the proxy sends a turned-away browser, with the original
+        // request's method: any method must reach the redirect.
+        .route("/login/required", axum::routing::any(login::required))
         .route("/login/google", get(login::google))
         .route("/login/google/callback", get(login::google_callback))
         .route("/logout", get(login::logout))
@@ -177,7 +183,35 @@ pub fn router(state: &AppState) -> Router {
         .route("/billing/checkout", get(billing::checkout))
         .merge(site)
         .with_state(state.clone());
-    newera_relay::router_with(state.rooms.clone()).merge(cloud)
+    // With a list of owners, the relay is theirs: opening a room needs a
+    // listed session, so the editor cannot be driven through this server by
+    // somebody else's page. Without a list the relay is open as before.
+    let relay = newera_relay::router_with(state.rooms.clone()).layer(
+        axum::middleware::from_fn_with_state(state.clone(), rooms_for_owners),
+    );
+    relay.merge(cloud)
+}
+
+/// Turns away `POST /rooms` from a browser without a listed session when
+/// the installation has a list of owners.
+async fn rooms_for_owners(
+    axum::extract::State(state): axum::extract::State<AppState>,
+    request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    use axum::response::IntoResponse as _;
+    let opens = request.method() == axum::http::Method::POST && request.uri().path() == "/rooms";
+    if opens
+        && state.config.allowed_emails.list().is_some()
+        && login::signed_in(&state, request.headers()).await.is_none()
+    {
+        return (
+            axum::http::StatusCode::UNAUTHORIZED,
+            [(axum::http::header::CACHE_CONTROL, "no-store")],
+        )
+            .into_response();
+    }
+    next.run(request).await
 }
 
 /// The service's own address, opened in a browser: the site, which says

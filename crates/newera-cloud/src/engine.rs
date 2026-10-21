@@ -156,8 +156,8 @@ fn refused(text: impl Into<String>) -> Value {
 impl Engine {
     /// An engine working in the asset cache (`$XDG_CACHE_HOME/3d-new-era-ai`),
     /// which becomes the only place this process reads files from: projects
-    /// are unpacked there, and so are the bundles and top views the editor
-    /// caches.
+    /// are unpacked there, each with its files in its own copy's directory,
+    /// and so are the top views the editor caches.
     ///
     /// # Errors
     ///
@@ -558,12 +558,8 @@ impl Engine {
         };
         tokio::fs::write(&copy.file, &data).await?;
         let opened = {
-            let file = copy.file.clone();
-            tokio::task::spawn_blocking(move || {
-                let mut doc = Document::default();
-                newera_sh3d::open_file(&mut doc, &file).map(|_| doc)
-            })
-            .await?
+            let (dir, file) = (copy.dir.clone(), copy.file.clone());
+            tokio::task::spawn_blocking(move || open_copy(&dir, &file)).await?
         };
         let doc = opened.map_err(|why| anyhow::anyhow!("the project would not open: {why}"))?;
         copy.doc = SharedDocument::new(doc);
@@ -647,6 +643,22 @@ impl Engine {
             }
         }
     }
+}
+
+/// Opens the project written at `file` the way the desktop opens it, but
+/// unpacks its files inside the copy's own directory `dir` rather than the
+/// shared bundle cache: whatever the load unpacked goes with the copy.
+fn open_copy(dir: &Path, file: &Path) -> Result<Document, String> {
+    let (project, assets) =
+        newera_core::open_project(file, &dir.join("bundle")).map_err(|e| e.to_string())?;
+    let mut doc = Document::default();
+    newera_sh3d::Loaded::Project {
+        project,
+        path: file.to_owned(),
+        assets,
+    }
+    .into_document(&mut doc);
+    Ok(doc)
 }
 
 async fn count(db: &PgPool, account: &str, kind: &str) -> sqlx::Result<()> {
@@ -740,6 +752,54 @@ mod tests {
         assert!(dir.exists());
         drop(copy);
         assert!(!dir.exists());
+    }
+
+    /// A project with a model in it, as the bytes the database keeps.
+    fn project_with_a_model(scratch: &std::path::Path) -> Vec<u8> {
+        let assets = scratch.join("assets");
+        std::fs::create_dir_all(assets.join("models")).unwrap();
+        std::fs::write(assets.join("models/chair.obj"), "v 0 0 0\n").unwrap();
+        let mut home = newera_core::Home::default();
+        let mut piece = newera_core::Furniture {
+            model: Some("models/chair.obj".into()),
+            ..newera_core::Furniture::default()
+        };
+        piece.id = home.new_furniture_id();
+        home.furniture.push(piece);
+        let mut doc = super::Document::new(home);
+        doc.set_asset_dir(Some(assets));
+        let file = scratch.join("made.newera");
+        newera_core::save_project(&doc, &file).unwrap();
+        std::fs::read(file).unwrap()
+    }
+
+    #[test]
+    fn a_dropped_copy_leaves_no_unpacked_bundle() {
+        let scratch = std::env::temp_dir().join(format!("engine-bundle-{}", super::secret::id()));
+        let bytes = project_with_a_model(&scratch);
+        let dir = scratch.join("copy");
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("project.newera");
+        std::fs::write(&file, &bytes).unwrap();
+        let doc = super::open_copy(&dir, &file).unwrap();
+        let assets = doc.asset_dir().expect("the bundle's files are unpacked");
+        assert!(
+            assets.join("models/chair.obj").exists(),
+            "the model is where the copy reads it"
+        );
+        let copy = super::Loaded {
+            project: "p".into(),
+            doc: super::SharedDocument::new(doc),
+            dir: dir.clone(),
+            file,
+            touched: std::sync::Mutex::new(std::time::Instant::now()),
+            revision: tokio::sync::Mutex::new(1),
+            known: super::AtomicI64::new(1),
+        };
+        drop(copy);
+        let left = assets.exists();
+        let _ = std::fs::remove_dir_all(&scratch);
+        assert!(!left, "{} outlived the copy", assets.display());
     }
 
     #[test]

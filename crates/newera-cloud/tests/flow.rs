@@ -837,6 +837,11 @@ async fn sign_in_never_redirects_elsewhere() {
     for (asked, expected) in [
         ("https://evil.example/", "/account"),
         ("//evil.example/x", "/account"),
+        ("/\t/evil.example", "/account"),
+        ("/\n/evil.example", "/account"),
+        ("/\r/evil.example", "/account"),
+        ("/ /evil.example", "/account"),
+        ("/\\evil", "/account"),
         ("/oauth/authorize?x=1", "/oauth/authorize?x=1"),
         ("http://127.0.0.1:8790/app/", "http://127.0.0.1:8790/app/"),
     ] {
@@ -849,6 +854,167 @@ async fn sign_in_never_redirects_elsewhere() {
         .await;
         assert_eq!(back, expected, "{asked}");
     }
+}
+
+/// What the proxy's session check answers for `cookie`: the status, the
+/// cache header and the body.
+async fn check(base: &str, cookie: Option<&str>) -> (u16, String, String) {
+    let mut asked = client().get(format!("{base}/login/check"));
+    if let Some(cookie) = cookie {
+        asked = asked.header("cookie", cookie);
+    }
+    let answer = asked.send().await.unwrap();
+    let status = answer.status().as_u16();
+    let cache = answer.headers()["cache-control"]
+        .to_str()
+        .unwrap()
+        .to_owned();
+    (status, cache, answer.text().await.unwrap())
+}
+
+#[tokio::test]
+async fn the_proxy_lets_in_only_a_signed_in_browser() {
+    let Some((base, state)) = service().await else {
+        return;
+    };
+    let nobody = (401, "no-store".to_owned(), String::new());
+    let welcome = (204, "no-store".to_owned(), String::new());
+    assert_eq!(check(&base, None).await, nobody, "no session");
+    assert_eq!(
+        check(&base, Some("newera_session=made-up")).await,
+        nobody,
+        "a session nobody opened"
+    );
+    let (stranger, ..) = credentials(&base, &state, "stranger@example.com").await;
+    let (owner, ..) = credentials(&base, &state, "owner@example.com").await;
+    assert_eq!(check(&base, Some(&stranger)).await, welcome, "no list");
+
+    let (base, _) = restart(&state, list_of("owner@example.com")).await;
+    assert_eq!(check(&base, Some(&owner)).await, welcome, "listed");
+    assert_eq!(
+        check(&base, Some(&stranger)).await,
+        nobody,
+        "unlisted, once a list is set"
+    );
+}
+
+/// The sign-in page, asked for with a return target, never brings the person
+/// anywhere but a page of this service or the site.
+#[tokio::test]
+async fn the_sign_in_page_refuses_a_return_target_a_browser_would_read_as_another_host() {
+    let Some((base, _)) = service().await else {
+        return;
+    };
+    for target in [
+        "%2F%09%2Fevil.example",
+        "%2F%0A%2Fevil.example",
+        "%2F%5Cevil",
+    ] {
+        let page = client()
+            .get(format!("{base}/login?return_to={target}"))
+            .send()
+            .await
+            .unwrap()
+            .text()
+            .await
+            .unwrap();
+        assert_eq!(field(&page, "return_to"), "/account", "{target}");
+    }
+    let asked = client()
+        .get(format!("{base}/login/required"))
+        .header("x-original-uri", "/\t/evil.example")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(location(&asked), "/login?return_to=%2Faccount");
+}
+
+#[tokio::test]
+async fn the_proxy_sends_a_turned_away_browser_to_sign_in_and_back() {
+    let Some((base, _)) = service().await else {
+        return;
+    };
+    for (original, expected) in [
+        (
+            Some("/app/?a=1&b=2"),
+            "/login?return_to=%2Fapp%2F%3Fa%3D1%26b%3D2",
+        ),
+        (
+            Some("/app/?project=http%3A%2F%2Fx%2Fp&relay=https://h"),
+            "/login?return_to=%2Fapp%2F%3Fproject%3Dhttp%253A%252F%252Fx%252Fp%26relay%3Dhttps%3A%2F%2Fh",
+        ),
+        (
+            Some("https://evil.example/app/"),
+            "/login?return_to=%2Faccount",
+        ),
+        (Some("//evil.example/app/"), "/login?return_to=%2Faccount"),
+        (None, "/login?return_to=%2Faccount"),
+    ] {
+        let mut asked = client().get(format!("{base}/login/required"));
+        if let Some(original) = original {
+            asked = asked.header("x-original-uri", original);
+        }
+        let answer = asked.send().await.unwrap();
+        assert_eq!(answer.status(), 302, "{original:?}");
+        assert_eq!(location(&answer), expected, "{original:?}");
+        assert_eq!(answer.headers()["cache-control"], "no-store");
+        let back = param(&format!("{base}{expected}"), "return_to").unwrap();
+        assert_eq!(
+            back,
+            original
+                .filter(|o| o.starts_with("/app/"))
+                .unwrap_or("/account"),
+            "the sign-in page reads back what was asked"
+        );
+    }
+    // The proxy keeps the method of the request it guards.
+    for method in [
+        reqwest::Method::POST,
+        reqwest::Method::PUT,
+        reqwest::Method::DELETE,
+    ] {
+        let answer = client()
+            .request(method.clone(), format!("{base}/login/required"))
+            .header("x-original-uri", "/app/?a=1")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(answer.status(), 302, "{method}");
+        assert_eq!(location(&answer), "/login?return_to=%2Fapp%2F%3Fa%3D1");
+    }
+}
+
+/// `POST /rooms` with `cookie` (if any): the status.
+async fn open_room(base: &str, cookie: Option<&str>) -> u16 {
+    let mut asked = client()
+        .post(format!("{base}/rooms"))
+        .header("content-type", "application/json")
+        .body("{}");
+    if let Some(cookie) = cookie {
+        asked = asked.header("cookie", cookie);
+    }
+    asked.send().await.unwrap().status().as_u16()
+}
+
+#[tokio::test]
+async fn with_a_list_only_a_listed_session_opens_a_room() {
+    let Some((base, state)) = service().await else {
+        return;
+    };
+    let (stranger, ..) = credentials(&base, &state, "stranger@example.com").await;
+    let (owner, ..) = credentials(&base, &state, "owner@example.com").await;
+    assert_eq!(open_room(&base, None).await, 200, "no list: anyone");
+    assert_eq!(open_room(&base, Some(&stranger)).await, 200, "no list");
+
+    let (base, _) = restart(&state, list_of("owner@example.com")).await;
+    assert_eq!(open_room(&base, None).await, 401, "no session");
+    assert_eq!(
+        open_room(&base, Some("newera_session=made-up")).await,
+        401,
+        "a session nobody opened"
+    );
+    assert_eq!(open_room(&base, Some(&stranger)).await, 401, "unlisted");
+    assert_eq!(open_room(&base, Some(&owner)).await, 200, "listed");
 }
 
 /// A Buy Me a Coffee delivery of `kind` for `data`, signed as it signs.
