@@ -1,0 +1,25 @@
+[package]
+name = "newera-shop"
+description = "Shop products for the hosted 3D New Era AI: a product link becomes its identity, its data from AnySite, and every field's evidence"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+publish = false
+
+[dependencies]
+regex-lite = "0.1.9"
+reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }
+serde.workspace = true
+serde_json.workspace = true
+url = "2"
+
+[dev-dependencies]
+axum.workspace = true
+tokio = { workspace = true, features = ["net", "macros", "rt-multi-thread"] }
+
+[lints]
+workspace = true

@@ -1,0 +1,18 @@
+{
+ "recorded": "2026-10-21",
+ "request": {
+  "method": "POST",
+  "path": "/api/webparser/render",
+  "body": {
+   "url": "https://www.tegeldepot.nl/catalogsearch/result/?q=wandtegel",
+   "extract_contacts": true,
+   "same_origin_links": true
+  }
+ },
+ "status": 412,
+ "headers": {
+  "x-credits-charged": "10",
+  "x-error": "Failed to fetch URL. Website is not accessible"
+ },
+ "body": []
+}

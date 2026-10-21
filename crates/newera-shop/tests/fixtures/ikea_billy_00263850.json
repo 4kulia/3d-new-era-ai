@@ -1,0 +1,1392 @@
+{
+ "recorded": "2026-10-21",
+ "request": {
+  "method": "POST",
+  "path": "/api/ikea/products",
+  "body": {
+   "product": "https://www.ikea.com/nl/nl/p/billy-boekenkast-wit-00263850/"
+  }
+ },
+ "status": 200,
+ "headers": {
+  "x-credits-charged": "5"
+ },
+ "body": [
+  {
+   "@type": "@ikea_product",
+   "id": "00263850",
+   "item_type": "ART",
+   "global_item_id": "00263850",
+   "name": "BILLY",
+   "type_name": "Boekenkast",
+   "variant_text": "wit",
+   "measure_text": "80x28x202 cm",
+   "url": "https://www.ikea.com/nl/nl/p/billy-boekenkast-wit-00263850/",
+   "image": "https://www.ikea.com/nl/nl/images/products/billy-boekenkast-wit__1590272_pe1038911_s5.jpg",
+   "image_alt": "Een witte BILLY-boekenkast, rechthoekig, met zes planken, leeg, schoon, minimalistisch ontwerp.",
+   "contextual_image": "https://www.ikea.com/nl/nl/images/products/billy-boekenkast-wit__1051924_pe845813_s5.jpg",
+   "contextual_image_alt": "Witte BILLY boekenkast met boeken, vazen, & letter d. Naast raam & grijze stoel, verstelbare planken, spaanplaat & melamine, lichte kamer.",
+   "images": [
+    {
+     "@type": "@ikea_image",
+     "image": "https://www.ikea.com/nl/nl/images/products/billy-boekenkast-wit__1590272_pe1038911_s5.jpg",
+     "image_type": "MAIN_PRODUCT_IMAGE",
+     "alt": "Een witte BILLY-boekenkast, rechthoekig, met zes planken, leeg, schoon, minimalistisch ontwerp."
+    },
+    {
+     "@type": "@ikea_image",
+     "image": "https://www.ikea.com/nl/nl/images/products/billy-boekenkast-wit__1051924_pe845813_s5.jpg",
+     "image_type": "CONTEXT_PRODUCT_IMAGE",
+     "alt": "Witte BILLY boekenkast met boeken, vazen, & letter d. Naast raam & grijze stoel, verstelbare planken, spaanplaat & melamine, lichte kamer."
+    }
+   ],
+   "price": 42.49,
+   "currency": "EUR",
+   "previous_price": 49.99,
+   "previous_price_label": "Prijs voor niet IKEA Family leden",
+   "discount_amount": 7.5,
+   "discount_percentage": 15.0,
+   "price_tag": "FAMILY_PRICE",
+   "price_tag_text": "IKEA Family prijs",
+   "price_tags": [
+    "FAMILY_PRICE"
+   ],
+   "price_unit": null,
+   "price_unit_text": null,
+   "price_valid_from_date": "2026-10-15",
+   "price_valid_to_date": "2026-11-02",
+   "price_disclaimer": "Prijs geldig 15 okt - 2 nov of zolang de voorraad strekt",
+   "is_breathtaking_price": false,
+   "offer": null,
+   "rating": 4.4,
+   "rating_count": 177,
+   "badge": "Top seller",
+   "badge_type": "TOP_SELLER",
+   "is_online_sellable": true,
+   "is_last_chance": false,
+   "last_chance_text": null,
+   "set_item_count": null,
+   "energy_class": null,
+   "energy_class_image": null,
+   "energy_class_image_alt": null,
+   "energy_label_image": null,
+   "energy_sheet_url": null,
+   "quick_facts": [],
+   "min_order_quantity": null,
+   "product_class": "bookcases and display cabinets",
+   "colors": [
+    {
+     "@type": "@ikea_color",
+     "id": "10156",
+     "name": "wit",
+     "hex": "ffffff"
+    }
+   ],
+   "categories": [
+    {
+     "@type": "@ikea_category_ref",
+     "id": "st001",
+     "name": "Kasten"
+    },
+    {
+     "@type": "@ikea_category_ref",
+     "id": "st002",
+     "name": "Wandkasten & wandplanken"
+    },
+    {
+     "@type": "@ikea_category_ref",
+     "id": "10382",
+     "name": "Boekenkasten"
+    }
+   ],
+   "business_area": {
+    "@type": "@ikea_business_area",
+    "business_id": "02",
+    "business_name": "Living room storage",
+    "range_area_id": "021",
+    "range_area_name": "Living room storage system",
+    "product_area_id": "0214",
+    "product_area_name": "Bookcases"
+   },
+   "variant_count": 3,
+   "variants": [
+    {
+     "@type": "@ikea_variant",
+     "id": "50508652",
+     "item_type": "ART",
+     "global_item_id": "50508652",
+     "name": "BILLY",
+     "type_name": "Boekenkast",
+     "variant_text": "bruin walnootpatroon",
+     "measure_text": "80x28x202 cm",
+     "url": "https://www.ikea.com/nl/nl/p/billy-boekenkast-bruin-walnootpatroon-50508652/",
+     "image": "https://www.ikea.com/nl/nl/images/products/billy-boekenkast-bruin-walnootpatroon__1590308_pe1038947_s5.jpg",
+     "image_alt": "BILLY boekenkast: hoog, houten, 6 lege planken, lichtbruin, eenvoudig ontwerp.",
+     "contextual_image": "https://www.ikea.com/nl/nl/images/products/billy-boekenkast-bruin-walnootpatroon__1104848_pe867943_s5.jpg",
+     "contextual_image_alt": "Moderne woonkamer met BILLY boekenkast, beige bank, zwarte salontafel en muur met geometrisch patroon.",
+     "images": [
+      {
+       "@type": "@ikea_image",
+       "image": "https://www.ikea.com/nl/nl/images/products/billy-boekenkast-bruin-walnootpatroon__1590308_pe1038947_s5.jpg",
+       "image_type": "MAIN_PRODUCT_IMAGE",
+       "alt": "BILLY boekenkast: hoog, houten, 6 lege planken, lichtbruin, eenvoudig ontwerp."
+      },
+      {
+       "@type": "@ikea_image",
+       "image": "https://www.ikea.com/nl/nl/images/products/billy-boekenkast-bruin-walnootpatroon__1104848_pe867943_s5.jpg",
+       "image_type": "CONTEXT_PRODUCT_IMAGE",
+       "alt": "Moderne woonkamer met BILLY boekenkast, beige bank, zwarte salontafel en muur met geometrisch patroon."
+      },
+      {
+       "@type": "@ikea_image",
+       "image": "https://www.ikea.com/nl/nl/images/products/billy-boekenkast-bruin-walnootpatroon__1104839_pe867934_s5.jpg",
+       "image_type": "CONTEXT_PRODUCT_IMAGE",
+       "alt": "Kantoor aan huis: BILLY boekenkast staat hoog met houten planken. Omringd door bureau, stoel en speelgoed. Perfect voor opslag en weergave."
+      },
+      {
+       "@type": "@ikea_image",
+       "image": "https://www.ikea.com/nl/nl/images/products/billy-boekenkast-bruin-walnootpatroon__1104316_pe867604_s5.jpg",
+       "image_type": "QUALITY_PRODUCT_IMAGE",
+       "alt": "Close-up van een houten boekenplankrand, met fijne korreltextuur en gladde afwerking."
+      }
+     ],
+     "price": 67.99,
+     "currency": "EUR",
+     "previous_price": 79.99,
+     "previous_price_label": "Prijs voor niet IKEA Family leden",
+     "discount_amount": 12.0,
+     "discount_percentage": 15.0,
+     "price_tag": "FAMILY_PRICE",
+     "price_tag_text": "IKEA Family prijs",
+     "price_tags": [
+      "FAMILY_PRICE"
+     ],
+     "price_unit": null,
+     "price_unit_text": null,
+     "price_valid_from_date": "2026-10-15",
+     "price_valid_to_date": "2026-11-02",
+     "price_disclaimer": "Prijs geldig 15 okt - 2 nov of zolang de voorraad strekt",
+     "is_breathtaking_price": false,
+     "offer": null,
+     "rating": 4.4,
+     "rating_count": 177,
+     "badge": "Top seller",
+     "badge_type": "TOP_SELLER",
+     "is_online_sellable": true,
+     "is_last_chance": false,
+     "last_chance_text": null,
+     "set_item_count": null,
+     "energy_class": null,
+     "energy_class_image": null,
+     "energy_class_image_alt": null,
+     "energy_label_image": null,
+     "energy_sheet_url": null,
+     "quick_facts": []
+    },
+    {
+     "@type": "@ikea_variant",
+     "id": "10508932",
+     "item_type": "ART",
+     "global_item_id": "10508932",
+     "name": "BILLY",
+     "type_name": "Boekenkast",
+     "variant_text": "eikenpatroon",
+     "measure_text": "80x28x202 cm",
+     "url": "https://www.ikea.com/nl/nl/p/billy-boekenkast-eikenpatroon-10508932/",
+     "image": "https://www.ikea.com/nl/nl/images/products/billy-boekenkast-eikenpatroon__1590287_pe1038926_s5.jpg",
+     "image_alt": "Een hoge, lichtbruine BILLY-boekenkast met zes lege planken tegen een witte muur. Het heeft een eenvoudig en strak ontwerp met een houtachtige textuur.",
+     "contextual_image": "https://www.ikea.com/nl/nl/images/products/billy-boekenkast-eikenpatroon__1104850_pe867941_s5.jpg",
+     "contextual_image_alt": "Woonkamer met houten boekenkast, bank, decor en kunst.",
+     "images": [
+      {
+       "@type": "@ikea_image",
+       "image": "https://www.ikea.com/nl/nl/images/products/billy-boekenkast-eikenpatroon__1590287_pe1038926_s5.jpg",
+       "image_type": "MAIN_PRODUCT_IMAGE",
+       "alt": "Een hoge, lichtbruine BILLY-boekenkast met zes lege planken tegen een witte muur. Het heeft een eenvoudig en strak ontwerp met een houtachtige textuur."
+      },
+      {
+       "@type": "@ikea_image",
+       "image": "https://www.ikea.com/nl/nl/images/products/billy-boekenkast-eikenpatroon__1104850_pe867941_s5.jpg",
+       "image_type": "CONTEXT_PRODUCT_IMAGE",
+       "alt": "Woonkamer met houten boekenkast, bank, decor en kunst."
+      },
+      {
+       "@type": "@ikea_image",
+       "image": "https://www.ikea.com/nl/nl/images/products/billy-boekenkast-eikenpatroon__1104841_pe867932_s5.jpg",
+       "image_type": "CONTEXT_PRODUCT_IMAGE",
+       "alt": "BILLY boekenkast met verstelbare planken, natuurlijke houtafwerking in kantooromgeving."
+      },
+      {
+       "@type": "@ikea_image",
+       "image": "https://www.ikea.com/nl/nl/images/products/billy-boekenkast-eikenpatroon__1419748_pe977105_s5.jpg",
+       "image_type": "FUNCTIONAL_PRODUCT_IMAGE",
+       "alt": "Houten boekenkast met verstelbare planken, met witte opbergdozen en diverse decoratieve items."
+      },
+      {
+       "@type": "@ikea_image",
+       "image": "https://www.ikea.com/nl/nl/images/products/billy-boekenkast-eikenpatroon__1104315_pe867605_s5.jpg",
+       "image_type": "QUALITY_PRODUCT_IMAGE",
+       "alt": "BILLY Boekenkast, eikenpatroon, 80x28x202 cm"
+      }
+     ],
+     "price": 67.99,
+     "currency": "EUR",
+     "previous_price": 79.99,
+     "previous_price_label": "Prijs voor niet IKEA Family leden",
+     "discount_amount": 12.0,
+     "discount_percentage": 15.0,
+     "price_tag": "FAMILY_PRICE",
+     "price_tag_text": "IKEA Family prijs",
+     "price_tags": [
+      "FAMILY_PRICE"
+     ],
+     "price_unit": null,
+     "price_unit_text": null,
+     "price_valid_from_date": "2026-10-15",
+     "price_valid_to_date": "2026-11-02",
+     "price_disclaimer": "Prijs geldig 15 okt - 2 nov of zolang de voorraad strekt",
+     "is_breathtaking_price": false,
+     "offer": null,
+     "rating": 4.4,
+     "rating_count": 177,
+     "badge": null,
+     "badge_type": null,
+     "is_online_sellable": true,
+     "is_last_chance": false,
+     "last_chance_text": null,
+     "set_item_count": null,
+     "energy_class": null,
+     "energy_class_image": null,
+     "energy_class_image_alt": null,
+     "energy_label_image": null,
+     "energy_sheet_url": null,
+     "quick_facts": []
+    },
+    {
+     "@type": "@ikea_variant",
+     "id": "40477340",
+     "item_type": "ART",
+     "global_item_id": "40477340",
+     "name": "BILLY",
+     "type_name": "Boekenkast",
+     "variant_text": "zwart eikenpatroon",
+     "measure_text": "80x28x202 cm",
+     "url": "https://www.ikea.com/nl/nl/p/billy-boekenkast-zwart-eikenpatroon-40477340/",
+     "image": "https://www.ikea.com/nl/nl/images/products/billy-boekenkast-zwart-eikenpatroon__1590300_pe1038939_s5.jpg",
+     "image_alt": "BILLY zwarte boekenkast, 6 planken, modern ontwerp.",
+     "contextual_image": "https://www.ikea.com/nl/nl/images/products/billy-boekenkast-zwart-eikenpatroon__1104847_pe867940_s5.jpg",
+     "contextual_image_alt": "Moderne woonkamer met BILLY boekenkast, bank, salontafel, inrichting en paard op plank.",
+     "images": [
+      {
+       "@type": "@ikea_image",
+       "image": "https://www.ikea.com/nl/nl/images/products/billy-boekenkast-zwart-eikenpatroon__1590300_pe1038939_s5.jpg",
+       "image_type": "MAIN_PRODUCT_IMAGE",
+       "alt": "BILLY zwarte boekenkast, 6 planken, modern ontwerp."
+      },
+      {
+       "@type": "@ikea_image",
+       "image": "https://www.ikea.com/nl/nl/images/products/billy-boekenkast-zwart-eikenpatroon__1104847_pe867940_s5.jpg",
+       "image_type": "CONTEXT_PRODUCT_IMAGE",
+       "alt": "Moderne woonkamer met BILLY boekenkast, bank, salontafel, inrichting en paard op plank."
+      },
+      {
+       "@type": "@ikea_image",
+       "image": "https://www.ikea.com/nl/nl/images/products/billy-boekenkast-zwart-eikenpatroon__1104838_pe867931_s5.jpg",
+       "image_type": "CONTEXT_PRODUCT_IMAGE",
+       "alt": "Zwarte BILLY boekenkast met boeken, dozen, bureau, stoel, rieten stoel, klok."
+      },
+      {
+       "@type": "@ikea_image",
+       "image": "https://www.ikea.com/nl/nl/images/products/billy-boekenkast-zwart-eikenpatroon__1104313_pe867601_s5.jpg",
+       "image_type": "QUALITY_PRODUCT_IMAGE",
+       "alt": "BILLY boekenkast hoek, donkere houtstructuur, stevige planken zichtbaar."
+      }
+     ],
+     "price": 67.99,
+     "currency": "EUR",
+     "previous_price": 79.99,
+     "previous_price_label": "Prijs voor niet IKEA Family leden",
+     "discount_amount": 12.0,
+     "discount_percentage": 15.0,
+     "price_tag": "FAMILY_PRICE",
+     "price_tag_text": "IKEA Family prijs",
+     "price_tags": [
+      "FAMILY_PRICE"
+     ],
+     "price_unit": null,
+     "price_unit_text": null,
+     "price_valid_from_date": "2026-10-15",
+     "price_valid_to_date": "2026-11-02",
+     "price_disclaimer": "Prijs geldig 15 okt - 2 nov of zolang de voorraad strekt",
+     "is_breathtaking_price": false,
+     "offer": null,
+     "rating": 4.4,
+     "rating_count": 177,
+     "badge": null,
+     "badge_type": null,
+     "is_online_sellable": true,
+     "is_last_chance": false,
+     "last_chance_text": null,
+     "set_item_count": null,
+     "energy_class": null,
+     "energy_class_image": null,
+     "energy_class_image_alt": null,
+     "energy_label_image": null,
+     "energy_sheet_url": null,
+     "quick_facts": []
+    }
+   ],
+   "variations": [
+    {
+     "@type": "@ikea_variation",
+     "id": "colour",
+     "name": "Kleur",
+     "values": [
+      {
+       "@type": "@ikea_variation_value",
+       "name": "bruin walnootpatroon",
+       "product_ids": [
+        "50508652"
+       ]
+      },
+      {
+       "@type": "@ikea_variation_value",
+       "name": "eikenpatroon",
+       "product_ids": [
+        "10508932"
+       ]
+      },
+      {
+       "@type": "@ikea_variation_value",
+       "name": "wit",
+       "product_ids": [
+        "00263850"
+       ]
+      },
+      {
+       "@type": "@ikea_variation_value",
+       "name": "zwart eikenpatroon",
+       "product_ids": [
+        "40477340"
+       ]
+      }
+     ]
+    }
+   ],
+   "global_name": "BILLY",
+   "local_name": "BILLY NNN boekkast 80x28x202 wit",
+   "product_type": "boekenkast",
+   "product_type_id": "10154",
+   "alias": "billy-boekenkast-wit",
+   "benefit_summary": "Elke 5 seconden wordt er ergens ter wereld een BILLY verkocht. Behoorlijk indrukwekkend als je bedenkt dat BILLY al in 1979 werd gelanceerd. Het is de favoriet van boekenliefhebbers, die altijd in stijl blijft.",
+   "benefits": [
+    "Verstelbare planken; naar behoefte aan te passen.",
+    "Een enkele eenheid kan voldoende opbergruimte bieden voor een beperkte ruimte of de basis vormen voor een grotere opberger als je behoeftes veranderen."
+   ],
+   "long_benefits": [
+    {
+     "@type": "@ikea_long_benefit",
+     "name": "BILLY, bibliotheek",
+     "subject": "Summary",
+     "header": "BILLY voor boekenliefhebbers",
+     "text": "Dit is BILLY - ons meest veelzijdige boekenkastsysteem. BILLY kan het begin worden van een eigen bibliotheek, waar de boeken goed gedijen en je zin krijgt in lezen. BILLY is verkrijgbaar in verschillende breedtes en hoogtes, kleuren en materialen. Voor alle boeken en kamers. En als de bibliotheek groeit, kan je experimenteren - met extra planken of met boekenkastverlichting die de boeken tot leven brengt."
+    },
+    {
+     "@type": "@ikea_long_benefit",
+     "name": "BILLY boekenkast",
+     "subject": "Designer thoughts",
+     "header": "Designer Gillis Lundgren",
+     "text": "`Toen ik de opdracht kreeg om een eenvoudige, functionele en slimme opberger voor boeken te maken, kon ik niet vermoeden dat BILLY in zoveel woningen over de hele wereld zou komen te staan. Ik herinner me nog hoe blij ik was met de verstelbare planken en de diepte van de boekenkast - perfect voor boeken. Bovendien konden we BILLY transporteren in een plat pakket - een idee waar ik als eerste mee kwam! De boekenkast is nog steeds een van mijn favorieten en ik hoop dat we hem nog lang in het assortiment zullen hebben.'"
+    },
+    {
+     "@type": "@ikea_long_benefit",
+     "name": "Wat is spaanplaat_algemeen/tekst binnen HFB",
+     "subject": "Material",
+     "header": "Wat is spaanplaat?",
+     "text": "Spaanplaat is gemaakt van gerecycled hout en overschot van houtzagerijen. Zo worden stukjes hout met de verkeerde kleur, houtsnippers en zaagsel een bron en hoeven ze niet te worden weggegooid. We gebruiken spaanplaat voor producten als boekenkasten, bedframes, zitbanken en keukenframes. Om de spaanplaat te beschermen tegen slijtage en vocht, brengen we een laagje vernis, fineer of folie aan. Hiermee ziet het product er ook nog eens mooier uit."
+    }
+   ],
+   "story": [],
+   "measurements": [
+    {
+     "@type": "@ikea_measurement",
+     "name": "Breedte",
+     "metric": "80 cm",
+     "imperial": "31 1/2 \"",
+     "package_number": null
+    },
+    {
+     "@type": "@ikea_measurement",
+     "name": "Diepte",
+     "metric": "28 cm",
+     "imperial": "11 \"",
+     "package_number": null
+    },
+    {
+     "@type": "@ikea_measurement",
+     "name": "Hoogte",
+     "metric": "202 cm",
+     "imperial": "79 1/2 \"",
+     "package_number": null
+    },
+    {
+     "@type": "@ikea_measurement",
+     "name": "Max. belasting/plank",
+     "metric": "30 kg",
+     "imperial": "66 lb",
+     "package_number": null
+    }
+   ],
+   "reference_measurements": [
+    {
+     "@type": "@ikea_reference_measurement",
+     "metric": "80x28x202 cm",
+     "imperial": "31 1/2x11x79 1/2 \""
+    }
+   ],
+   "package_measurements": [
+    {
+     "@type": "@ikea_measurement",
+     "name": "Hoogte",
+     "metric": "13 cm",
+     "imperial": "5 \"",
+     "package_number": 1
+    },
+    {
+     "@type": "@ikea_measurement",
+     "name": "Lengte",
+     "metric": "206 cm",
+     "imperial": "81 ¼ \"",
+     "package_number": 1
+    },
+    {
+     "@type": "@ikea_measurement",
+     "name": "Nettogewicht",
+     "metric": "35.84 kg",
+     "imperial": "78 lb 16 oz",
+     "package_number": 1
+    },
+    {
+     "@type": "@ikea_measurement",
+     "name": "Volume",
+     "metric": "76.7 l",
+     "imperial": "2.71 cu.ft",
+     "package_number": 1
+    },
+    {
+     "@type": "@ikea_measurement",
+     "name": "Gewicht",
+     "metric": "36.85 kg",
+     "imperial": "81 lb 4 oz",
+     "package_number": 1
+    },
+    {
+     "@type": "@ikea_measurement",
+     "name": "Breedte",
+     "metric": "30 cm",
+     "imperial": "11 ½ \"",
+     "package_number": 1
+    }
+   ],
+   "package_count": 1,
+   "unit": "PIECE",
+   "materials": [
+    {
+     "@type": "@ikea_material_group",
+     "product_type": null,
+     "parts": [
+      {
+       "@type": "@ikea_material_part",
+       "part": "Belangrijkste onderdelen:",
+       "material": "spaanplaat, Papierfolie, Kunststof rand"
+      },
+      {
+       "@type": "@ikea_material_part",
+       "part": "Zijpaneel:",
+       "material": "spaanplaat, Papierfolie, melamine folie, Kunststof rand"
+      },
+      {
+       "@type": "@ikea_material_part",
+       "part": "Frontsokkel:",
+       "material": "spaanplaat, Papierfolie"
+      },
+      {
+       "@type": "@ikea_material_part",
+       "part": "Achterwand:",
+       "material": "hardboard, kleurlak, Papierfolie"
+      }
+     ]
+    }
+   ],
+   "care_instructions": [
+    {
+     "@type": "@ikea_care_instruction",
+     "heading": null,
+     "product_type": null,
+     "texts": [
+      "Afnemen met een doekje met wat mild schoonmaakmiddel.",
+      "Nadrogen met een droge doek."
+     ]
+    }
+   ],
+   "designers": [
+    {
+     "@type": "@ikea_designer",
+     "id": "10272",
+     "name": "Gillis Lundgren"
+    }
+   ],
+   "good_to_know": [
+    {
+     "@type": "@ikea_note",
+     "note_type": "Warning",
+     "text": "WAARSCHUWING! Kantelgevaar. Dit product moet veilig worden verankerd. Gebruik geschikte schroeven en pluggen. Als je twijfelt, vraag dan professioneel advies."
+    },
+    {
+     "@type": "@ikea_note",
+     "note_type": "Compl. assembly information",
+     "text": "Onthoud dat je genoeg ruimte nodig hebt tussen de bovenkant van het meubel en het plafond om het product aan de wand te kunnen verankeren."
+    },
+    {
+     "@type": "@ikea_note",
+     "note_type": "Included",
+     "text": "Incl. 1 vaste en 4 verstelbare planken."
+    },
+    {
+     "@type": "@ikea_note",
+     "note_type": "May be completed",
+     "text": "Uitstekend te completeren met deuren in verschillende kleuren en uitvoeringen."
+    },
+    {
+     "@type": "@ikea_note",
+     "note_type": "May be completed",
+     "text": "Prima te complementeren met extra planken voor meer opbergruimte."
+    },
+    {
+     "@type": "@ikea_note",
+     "note_type": "May be completed",
+     "text": "Prima te combineren met het BILLY bovendeel in dezelfde breedte en diepte voor extra opbergruimte in de hoogte."
+    },
+    {
+     "@type": "@ikea_note",
+     "note_type": "Other information",
+     "text": "IKEA of Sweden AB SE-343 81 Älmhult, IKEA.com"
+    }
+   ],
+   "documents": [
+    {
+     "@type": "@ikea_document",
+     "document_type": "ASSEMBLY_INSTRUCTIONS",
+     "url": "https://www.ikea.com/nl/nl/assembly_instructions/billy-boekenkast-wit__AA-1823127-9-2.pdf"
+    },
+    {
+     "@type": "@ikea_document",
+     "document_type": "MANUAL",
+     "url": "https://www.ikea.com/nl/nl/manuals/billy-boekenkast-wit__AA-2180177-2-2.pdf"
+    }
+   ],
+   "questions": [],
+   "warnings": [],
+   "compliance": [],
+   "media": [
+    {
+     "@type": "@ikea_media",
+     "id": "1590272",
+     "media_type": "MAIN_PRODUCT_IMAGE",
+     "image": "https://www.ikea.com/nl/nl/images/products/billy-boekenkast-wit__1590272_pe1038911_s5.jpg",
+     "alt": "Een witte BILLY-boekenkast, rechthoekig, met zes planken, leeg, schoon, minimalistisch ontwerp.",
+     "orientation": "SQUARE",
+     "poster_image": null,
+     "transcript": null,
+     "product_ids": []
+    },
+    {
+     "@type": "@ikea_media",
+     "id": "1051924",
+     "media_type": "CONTEXT_PRODUCT_IMAGE",
+     "image": "https://www.ikea.com/nl/nl/images/products/billy-boekenkast-wit__1051924_pe845813_s5.jpg",
+     "alt": "Witte BILLY boekenkast met boeken, vazen, & letter d. Naast raam & grijze stoel, verstelbare planken, spaanplaat & melamine, lichte kamer.",
+     "orientation": "SQUARE",
+     "poster_image": null,
+     "transcript": null,
+     "product_ids": [
+      "00263850"
+     ]
+    },
+    {
+     "@type": "@ikea_media",
+     "id": "1065929",
+     "media_type": "IMPORTED_PRODUCT_IMAGE",
+     "image": "https://www.ikea.com/nl/nl/images/products/billy-boekenkast-wit__1065929_ph181488_s5.jpg",
+     "alt": "Grote witte BILLY boekenkasten met tal van boeken en een minimalistische inrichting. Schoon, georganiseerd, modern ontwerp.",
+     "orientation": "SQUARE",
+     "poster_image": null,
+     "transcript": null,
+     "product_ids": [
+      "00263850"
+     ]
+    },
+    {
+     "@type": "@ikea_media",
+     "id": "1065928",
+     "media_type": "IMPORTED_PRODUCT_IMAGE",
+     "image": "https://www.ikea.com/nl/nl/images/products/billy-boekenkast-wit__1065928_ph182491_s5.jpg",
+     "alt": "Prachtige woonkamer met groene muren, witte BILLY boekenplank gevuld met kleurrijke boeken, diverse ingelijste kunstwerken en gezellige zitjes.",
+     "orientation": "PORTRAIT",
+     "poster_image": null,
+     "transcript": null,
+     "product_ids": [
+      "00263850",
+      "19389152",
+      "70286768"
+     ]
+    },
+    {
+     "@type": "@ikea_media",
+     "id": "1065965",
+     "media_type": "IMPORTED_PRODUCT_IMAGE",
+     "image": "https://www.ikea.com/nl/nl/images/products/billy-boekenkast-wit__1065965_ph158750_s5.jpg",
+     "alt": "Neutrale woonkamer met witte BILLY boekenkasten, beige wanden, houten vloer en diverse decoratieve items.",
+     "orientation": "LANDSCAPE",
+     "poster_image": null,
+     "transcript": null,
+     "product_ids": [
+      "00263850",
+      "50277393"
+     ]
+    },
+    {
+     "@type": "@ikea_media",
+     "id": "1065956",
+     "media_type": "IMPORTED_PRODUCT_IMAGE",
+     "image": "https://www.ikea.com/nl/nl/images/products/billy-boekenkast-wit__1065956_ph161331_s5.jpg",
+     "alt": "Een gezellige kamer, een blauwe BILLY boekenkast gevuld met kleurrijke boeken en decoratieve artikelen, die een levendige en uitnodigende sfeer creëren.",
+     "orientation": "LANDSCAPE",
+     "poster_image": null,
+     "transcript": null,
+     "product_ids": [
+      "00263850"
+     ]
+    },
+    {
+     "@type": "@ikea_media",
+     "id": "0546689",
+     "media_type": "MEASUREMENT_ILLUSTRATION",
+     "image": "https://www.ikea.com/nl/nl/images/products/billy-boekenkast-wit__0546689_pe656300_s5.jpg",
+     "alt": "Illustratie met afmetingen voor het product: BILLY.",
+     "orientation": null,
+     "poster_image": null,
+     "transcript": null,
+     "product_ids": []
+    },
+    {
+     "@type": "@ikea_media",
+     "id": "1234700",
+     "media_type": "DESIGNER_PICTURE",
+     "image": "https://www.ikea.com/nl/nl/images/products/billy-boekenkast-wit__1234700_pe051102_p.jpg",
+     "alt": "BILLY Boekenkast, wit, 80x28x202 cm",
+     "orientation": "PORTRAIT",
+     "poster_image": null,
+     "transcript": null,
+     "product_ids": []
+    }
+   ],
+   "certifications": [],
+   "technical_notes": [],
+   "pack_type": null,
+   "pack_item_count": null,
+   "is_acknowledgement_required": null,
+   "attributes": [
+    {
+     "@type": "@ikea_attribute",
+     "id": "38764",
+     "name": "Kleur",
+     "values": [
+      "wit"
+     ],
+     "value_details": [
+      {
+       "@type": "@ikea_attribute_value",
+       "id": "10156",
+       "name": "wit",
+       "description": null,
+       "short_description": null
+      }
+     ]
+    },
+    {
+     "@type": "@ikea_attribute",
+     "id": "38765",
+     "name": "Materiaal",
+     "values": [
+      "Hout (incl. board)"
+     ],
+     "value_details": [
+      {
+       "@type": "@ikea_attribute_value",
+       "id": "47349",
+       "name": "Hout (incl. board)",
+       "description": null,
+       "short_description": null
+      }
+     ]
+    },
+    {
+     "@type": "@ikea_attribute",
+     "id": "45286",
+     "name": "Uiterlijk",
+     "values": [
+      "Effen"
+     ],
+     "value_details": [
+      {
+       "@type": "@ikea_attribute_value",
+       "id": "48359",
+       "name": "Effen",
+       "description": null,
+       "short_description": null
+      }
+     ]
+    },
+    {
+     "@type": "@ikea_attribute",
+     "id": "47352",
+     "name": "Eigenschappen",
+     "values": [
+      "Met planken"
+     ],
+     "value_details": [
+      {
+       "@type": "@ikea_attribute_value",
+       "id": "53039",
+       "name": "Met planken",
+       "description": null,
+       "short_description": null
+      }
+     ]
+    },
+    {
+     "@type": "@ikea_attribute",
+     "id": "47688",
+     "name": "Deuren",
+     "values": [
+      "Zonder deuren"
+     ],
+     "value_details": [
+      {
+       "@type": "@ikea_attribute_value",
+       "id": "47687",
+       "name": "Zonder deuren",
+       "description": null,
+       "short_description": null
+      }
+     ]
+    }
+   ],
+   "local_tags": [
+    {
+     "@type": "@ikea_product_tag",
+     "name": "RETURN_POLICY",
+     "valid_from_at": null,
+     "valid_to_at": null,
+     "values": [
+      "NUMBER_OF_DAYS:365",
+      "RETURN_POLICY_URL:https://www.ikea.com/nl/nl/customer-service/returns-claims/"
+     ]
+    }
+   ],
+   "promotion": {
+    "@type": "@ikea_promotion",
+    "id": "FREEMARKET_MESSAGE_10",
+    "text": "IKEA kan je helpen met speciale services voor bedrijven zoals interieur advies, transport en montage.",
+    "link_text": "Ga naar IKEA for Business",
+    "link_url": "https://www.ikea.com/nl/nl/ikea-business/"
+   },
+   "is_assembly_required": true,
+   "assembly": [
+    {
+     "@type": "@ikea_assembly",
+     "assembly_type": "CUSTOMER_ASSEMBLY",
+     "duration": 54,
+     "duration_unit": "MINUTES",
+     "person_count": 1,
+     "tools": []
+    }
+   ],
+   "professional_assembly_duration": 20,
+   "professional_assembly_duration_unit": "MINUTES",
+   "is_new": false,
+   "is_news": false,
+   "news_from_date": null,
+   "news_to_date": null,
+   "is_breathtaking_item": false,
+   "style_group": "Scandinavian Modern",
+   "price_level": "LOW",
+   "product_family_id": "27969",
+   "product_classes": [
+    "bookcases and display cabinets"
+   ],
+   "category_ids": [
+    "10382",
+    "58288"
+   ],
+   "product_tags": [
+    {
+     "@type": "@ikea_product_tag",
+     "name": "TOP_SELLER",
+     "valid_from_at": null,
+     "valid_to_at": null,
+     "values": []
+    }
+   ],
+   "child_items": [],
+   "complementary_items": [],
+   "accessories": [
+    {
+     "@type": "@ikea_related_item",
+     "id": "70401933",
+     "item_type": "ART",
+     "relation": "ADDS_ADDITIONAL_FUNCTION",
+     "product_type": "bookcases and display cabinets"
+    },
+    {
+     "@type": "@ikea_related_item",
+     "id": "40263853",
+     "item_type": "ART",
+     "relation": "ADDS_ADDITIONAL_FUNCTION",
+     "product_type": "bookcases and display cabinets"
+    },
+    {
+     "@type": "@ikea_related_item",
+     "id": "20265301",
+     "item_type": "ART",
+     "relation": "USED_WITH",
+     "product_type": "shelves"
+    },
+    {
+     "@type": "@ikea_related_item",
+     "id": "10286752",
+     "item_type": "ART",
+     "relation": "USED_WITH",
+     "product_type": "shelves"
+    },
+    {
+     "@type": "@ikea_related_item",
+     "id": "20477398",
+     "item_type": "ART",
+     "relation": "USED_WITH",
+     "product_type": "shelves"
+    },
+    {
+     "@type": "@ikea_related_item",
+     "id": "20477355",
+     "item_type": "ART",
+     "relation": "USED_WITH",
+     "product_type": "shelves"
+    },
+    {
+     "@type": "@ikea_related_item",
+     "id": "00508659",
+     "item_type": "ART",
+     "relation": "USED_WITH",
+     "product_type": "shelves"
+    },
+    {
+     "@type": "@ikea_related_item",
+     "id": "00492823",
+     "item_type": "ART",
+     "relation": "USED_WITH",
+     "product_type": "shelves"
+    },
+    {
+     "@type": "@ikea_related_item",
+     "id": "80596893",
+     "item_type": "ART",
+     "relation": "HELPS_TO_ORGANISE",
+     "product_type": "boxes/baskets"
+    },
+    {
+     "@type": "@ikea_related_item",
+     "id": "70596902",
+     "item_type": "ART",
+     "relation": "HELPS_TO_ORGANISE",
+     "product_type": "paper and media organizers"
+    },
+    {
+     "@type": "@ikea_related_item",
+     "id": "60620097",
+     "item_type": "ART",
+     "relation": "HELPS_TO_ORGANISE",
+     "product_type": "paper and media organizers"
+    },
+    {
+     "@type": "@ikea_related_item",
+     "id": "60596889",
+     "item_type": "ART",
+     "relation": "HELPS_TO_ORGANISE",
+     "product_type": "paper and media organizers"
+    },
+    {
+     "@type": "@ikea_related_item",
+     "id": "50596899",
+     "item_type": "ART",
+     "relation": "HELPS_TO_ORGANISE",
+     "product_type": "paper and media organizers"
+    },
+    {
+     "@type": "@ikea_related_item",
+     "id": "40596890",
+     "item_type": "ART",
+     "relation": "HELPS_TO_ORGANISE",
+     "product_type": "paper and media organizers"
+    },
+    {
+     "@type": "@ikea_related_item",
+     "id": "10596900",
+     "item_type": "ART",
+     "relation": "HELPS_TO_ORGANISE",
+     "product_type": "boxes/baskets"
+    },
+    {
+     "@type": "@ikea_related_item",
+     "id": "10596896",
+     "item_type": "ART",
+     "relation": "HELPS_TO_ORGANISE",
+     "product_type": "boxes/baskets"
+    },
+    {
+     "@type": "@ikea_related_item",
+     "id": "00596892",
+     "item_type": "ART",
+     "relation": "HELPS_TO_ORGANISE",
+     "product_type": "boxes/baskets"
+    },
+    {
+     "@type": "@ikea_related_item",
+     "id": "80504049",
+     "item_type": "ART",
+     "relation": "ADDS_ADDITIONAL_FUNCTION",
+     "product_type": "boxes/baskets"
+    },
+    {
+     "@type": "@ikea_related_item",
+     "id": "60610550",
+     "item_type": "ART",
+     "relation": "ADDS_ADDITIONAL_FUNCTION",
+     "product_type": "boxes/baskets"
+    },
+    {
+     "@type": "@ikea_related_item",
+     "id": "20546467",
+     "item_type": "ART",
+     "relation": "ADDS_ADDITIONAL_FUNCTION",
+     "product_type": "boxes/baskets"
+    },
+    {
+     "@type": "@ikea_related_item",
+     "id": "00610548",
+     "item_type": "ART",
+     "relation": "ADDS_ADDITIONAL_FUNCTION",
+     "product_type": "boxes/baskets"
+    },
+    {
+     "@type": "@ikea_related_item",
+     "id": "s99561153",
+     "item_type": "SPR",
+     "relation": "ADDS_ADDITIONAL_FUNCTION",
+     "product_type": "boxes/baskets"
+    },
+    {
+     "@type": "@ikea_related_item",
+     "id": "80599146",
+     "item_type": "ART",
+     "relation": "ADDS_ADDITIONAL_FUNCTION",
+     "product_type": "boxes/baskets"
+    },
+    {
+     "@type": "@ikea_related_item",
+     "id": "s69561282",
+     "item_type": "SPR",
+     "relation": "ADDS_ADDITIONAL_FUNCTION",
+     "product_type": "boxes/baskets"
+    },
+    {
+     "@type": "@ikea_related_item",
+     "id": "60568546",
+     "item_type": "ART",
+     "relation": "ADDS_ADDITIONAL_FUNCTION",
+     "product_type": "boxes/baskets"
+    },
+    {
+     "@type": "@ikea_related_item",
+     "id": "10515334",
+     "item_type": "ART",
+     "relation": "ADDS_ADDITIONAL_FUNCTION",
+     "product_type": "paper and media organizers"
+    },
+    {
+     "@type": "@ikea_related_item",
+     "id": "s09596816",
+     "item_type": "SPR",
+     "relation": "ADDS_ADDITIONAL_FUNCTION",
+     "product_type": "boxes/baskets"
+    },
+    {
+     "@type": "@ikea_related_item",
+     "id": "s09596760",
+     "item_type": "SPR",
+     "relation": "ADDS_ADDITIONAL_FUNCTION",
+     "product_type": "boxes/baskets"
+    },
+    {
+     "@type": "@ikea_related_item",
+     "id": "50500825",
+     "item_type": "ART",
+     "relation": "ADDS_ADDITIONAL_FUNCTION",
+     "product_type": "paper and media organizers"
+    },
+    {
+     "@type": "@ikea_related_item",
+     "id": "80630608",
+     "item_type": "ART",
+     "relation": "ADDS_ADDITIONAL_FUNCTION",
+     "product_type": "boxes/baskets"
+    },
+    {
+     "@type": "@ikea_related_item",
+     "id": "80542447",
+     "item_type": "ART",
+     "relation": "ADDS_ADDITIONAL_FUNCTION",
+     "product_type": "desk accessories"
+    },
+    {
+     "@type": "@ikea_related_item",
+     "id": "70102972",
+     "item_type": "ART",
+     "relation": "ADDS_ADDITIONAL_FUNCTION",
+     "product_type": "boxes/baskets"
+    },
+    {
+     "@type": "@ikea_related_item",
+     "id": "50316182",
+     "item_type": "ART",
+     "relation": "HELPS_TO_ORGANISE",
+     "product_type": "boxes/baskets"
+    },
+    {
+     "@type": "@ikea_related_item",
+     "id": "40316069",
+     "item_type": "ART",
+     "relation": "HELPS_TO_ORGANISE",
+     "product_type": "boxes/baskets"
+    },
+    {
+     "@type": "@ikea_related_item",
+     "id": "20542445",
+     "item_type": "ART",
+     "relation": "ADDS_ADDITIONAL_FUNCTION",
+     "product_type": "desk accessories"
+    },
+    {
+     "@type": "@ikea_related_item",
+     "id": "s09440839",
+     "item_type": "SPR",
+     "relation": "ADDS_ADDITIONAL_FUNCTION",
+     "product_type": "boxes/baskets"
+    },
+    {
+     "@type": "@ikea_related_item",
+     "id": "00542446",
+     "item_type": "ART",
+     "relation": "ADDS_ADDITIONAL_FUNCTION",
+     "product_type": "desk accessories"
+    },
+    {
+     "@type": "@ikea_related_item",
+     "id": "70457487",
+     "item_type": "ART",
+     "relation": "ADDS_ADDITIONAL_FUNCTION",
+     "product_type": "boxes/baskets"
+    },
+    {
+     "@type": "@ikea_related_item",
+     "id": "60477037",
+     "item_type": "ART",
+     "relation": "ADDS_ADDITIONAL_FUNCTION",
+     "product_type": "boxes/baskets"
+    },
+    {
+     "@type": "@ikea_related_item",
+     "id": "50468104",
+     "item_type": "ART",
+     "relation": "ADDS_ADDITIONAL_FUNCTION",
+     "product_type": "boxes/baskets"
+    },
+    {
+     "@type": "@ikea_related_item",
+     "id": "10492455",
+     "item_type": "ART",
+     "relation": "ADDS_ADDITIONAL_FUNCTION",
+     "product_type": "paper and media organizers"
+    },
+    {
+     "@type": "@ikea_related_item",
+     "id": "90623141",
+     "item_type": "ART",
+     "relation": "HELPS_TO_ORGANISE",
+     "product_type": "boxes/baskets"
+    },
+    {
+     "@type": "@ikea_related_item",
+     "id": "60527891",
+     "item_type": "ART",
+     "relation": "ADDS_ADDITIONAL_FUNCTION",
+     "product_type": "integrated lighting"
+    },
+    {
+     "@type": "@ikea_related_item",
+     "id": "40216357",
+     "item_type": "ART",
+     "relation": "HELPS_TO_ORGANISE",
+     "product_type": "boxes/baskets"
+    },
+    {
+     "@type": "@ikea_related_item",
+     "id": "20628811",
+     "item_type": "ART",
+     "relation": "ADDS_ADDITIONAL_FUNCTION",
+     "product_type": "desk accessories"
+    },
+    {
+     "@type": "@ikea_related_item",
+     "id": "00516819",
+     "item_type": "ART",
+     "relation": "ADDS_ADDITIONAL_FUNCTION",
+     "product_type": "integrated lighting"
+    },
+    {
+     "@type": "@ikea_related_item",
+     "id": "90528243",
+     "item_type": "ART",
+     "relation": "ADDS_ADDITIONAL_FUNCTION",
+     "product_type": "doors and fronts"
+    },
+    {
+     "@type": "@ikea_related_item",
+     "id": "90477432",
+     "item_type": "ART",
+     "relation": "ADDS_ADDITIONAL_FUNCTION",
+     "product_type": "doors and fronts"
+    },
+    {
+     "@type": "@ikea_related_item",
+     "id": "90275617",
+     "item_type": "ART",
+     "relation": "ADDS_ADDITIONAL_FUNCTION",
+     "product_type": "doors and fronts"
+    },
+    {
+     "@type": "@ikea_related_item",
+     "id": "50477368",
+     "item_type": "ART",
+     "relation": "ADDS_ADDITIONAL_FUNCTION",
+     "product_type": "doors and fronts"
+    },
+    {
+     "@type": "@ikea_related_item",
+     "id": "50275558",
+     "item_type": "ART",
+     "relation": "ADDS_ADDITIONAL_FUNCTION",
+     "product_type": "doors and fronts"
+    },
+    {
+     "@type": "@ikea_related_item",
+     "id": "40495952",
+     "item_type": "ART",
+     "relation": "ADDS_ADDITIONAL_FUNCTION",
+     "product_type": "doors and fronts"
+    },
+    {
+     "@type": "@ikea_related_item",
+     "id": "40477415",
+     "item_type": "ART",
+     "relation": "ADDS_ADDITIONAL_FUNCTION",
+     "product_type": "doors and fronts"
+    },
+    {
+     "@type": "@ikea_related_item",
+     "id": "40407564",
+     "item_type": "ART",
+     "relation": "ADDS_ADDITIONAL_FUNCTION",
+     "product_type": "doors and fronts"
+    },
+    {
+     "@type": "@ikea_related_item",
+     "id": "30508709",
+     "item_type": "ART",
+     "relation": "ADDS_ADDITIONAL_FUNCTION",
+     "product_type": "doors and fronts"
+    },
+    {
+     "@type": "@ikea_related_item",
+     "id": "30477374",
+     "item_type": "ART",
+     "relation": "ADDS_ADDITIONAL_FUNCTION",
+     "product_type": "doors and fronts"
+    },
+    {
+     "@type": "@ikea_related_item",
+     "id": "20528246",
+     "item_type": "ART",
+     "relation": "ADDS_ADDITIONAL_FUNCTION",
+     "product_type": "doors and fronts"
+    },
+    {
+     "@type": "@ikea_related_item",
+     "id": "20508700",
+     "item_type": "ART",
+     "relation": "ADDS_ADDITIONAL_FUNCTION",
+     "product_type": "doors and fronts"
+    },
+    {
+     "@type": "@ikea_related_item",
+     "id": "00562420",
+     "item_type": "ART",
+     "relation": "ADDS_ADDITIONAL_FUNCTION",
+     "product_type": "doors and fronts"
+    },
+    {
+     "@type": "@ikea_related_item",
+     "id": "80573226",
+     "item_type": "ART",
+     "relation": "ADDS_CARE_AND_MAINTENANCE",
+     "product_type": "fittings"
+    },
+    {
+     "@type": "@ikea_related_item",
+     "id": "60596931",
+     "item_type": "ART",
+     "relation": "HELPS_TO_ORGANISE",
+     "product_type": "boxes/baskets"
+    },
+    {
+     "@type": "@ikea_related_item",
+     "id": "40596932",
+     "item_type": "ART",
+     "relation": "ADDS_ADDITIONAL_FUNCTION",
+     "product_type": "paper and media organizers"
+    },
+    {
+     "@type": "@ikea_related_item",
+     "id": "60516821",
+     "item_type": "ART",
+     "relation": "ADDS_ADDITIONAL_FUNCTION",
+     "product_type": "integrated lighting"
+    }
+   ],
+   "services": [
+    {
+     "@type": "@ikea_service",
+     "id": "ASSEMBLY",
+     "service_type": "ASSEMBLY",
+     "relation": "SOLD_WITH",
+     "service_item_id": "50000960",
+     "is_promoted": false,
+     "max_additional_quantity": null
+    }
+   ],
+   "updated_at": 1791996040,
+   "review_count": 177,
+   "recommended_count": 162,
+   "not_recommended_count": 12,
+   "helpful_vote_count": 204,
+   "unhelpful_vote_count": 0,
+   "first_reviewed_at": 1489141725,
+   "last_reviewed_at": 1792314100,
+   "rating_percentage": 88.0,
+   "rating_distribution": [
+    {
+     "@type": "@ikea_rating_bucket",
+     "stars": 1,
+     "count": 9
+    },
+    {
+     "@type": "@ikea_rating_bucket",
+     "stars": 2,
+     "count": 6
+    },
+    {
+     "@type": "@ikea_rating_bucket",
+     "stars": 3,
+     "count": 7
+    },
+    {
+     "@type": "@ikea_rating_bucket",
+     "stars": 4,
+     "count": 41
+    },
+    {
+     "@type": "@ikea_rating_bucket",
+     "stars": 5,
+     "count": 114
+    }
+   ],
+   "rating_aspects": [
+    {
+     "@type": "@ikea_rating_aspect",
+     "id": "appearance",
+     "label": "Design",
+     "rating": 4.4
+    },
+    {
+     "@type": "@ikea_rating_aspect",
+     "id": "ease_of_assembly",
+     "label": "Gemak van montage/installatie",
+     "rating": 4.6
+    },
+    {
+     "@type": "@ikea_rating_aspect",
+     "id": "ease_of_preparing",
+     "label": "Bereidingsgemak",
+     "rating": null
+    },
+    {
+     "@type": "@ikea_rating_aspect",
+     "id": "product_quality",
+     "label": "Kwaliteit",
+     "rating": 4.3
+    },
+    {
+     "@type": "@ikea_rating_aspect",
+     "id": "save_energy",
+     "label": "Bespaart water en/of energie",
+     "rating": null
+    },
+    {
+     "@type": "@ikea_rating_aspect",
+     "id": "sort_waste",
+     "label": "Helpt om te recyclen/afval te verminderen",
+     "rating": null
+    },
+    {
+     "@type": "@ikea_rating_aspect",
+     "id": "taste",
+     "label": "Smaak",
+     "rating": null
+    },
+    {
+     "@type": "@ikea_rating_aspect",
+     "id": "value_for_money",
+     "label": "Prijs vs kwaliteit",
+     "rating": 4.4
+    },
+    {
+     "@type": "@ikea_rating_aspect",
+     "id": "works_as_expected",
+     "label": "Werkt zoals verwacht",
+     "rating": 4.5
+    }
+   ]
+  }
+ ]
+}

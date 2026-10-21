@@ -349,11 +349,13 @@ fn server() -> NewEraMcp {
 mod tests {
     use super::*;
 
+    /// Every tool's definition, the hosted service's own included.
     fn tool_surface() -> std::collections::BTreeMap<String, serde_json::Value> {
         server()
             .tool_router
             .list_all()
             .into_iter()
+            .chain(crate::hosted::tools())
             .map(|tool| (tool.name.to_string(), serde_json::to_value(tool).unwrap()))
             .collect()
     }

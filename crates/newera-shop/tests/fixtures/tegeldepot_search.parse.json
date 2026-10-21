@@ -1,0 +1,29 @@
+{
+ "recorded": "2026-10-21",
+ "request": {
+  "method": "POST",
+  "path": "/api/webparser/parse",
+  "body": {
+   "url": "https://www.tegeldepot.nl/catalogsearch/result/?q=wandtegel",
+   "extract_contacts": true,
+   "same_origin_links": true
+  }
+ },
+ "status": 200,
+ "headers": {
+  "x-credits-charged": "1"
+ },
+ "body": [
+  {
+   "@type": "@web_parser_result",
+   "cleaned_html": "<div class=\"main-wrapper\" role=\"main\"><div class=\"main-content\"></div></div>",
+   "url": "https://www.tegeldepot.nl/catalogsearch/result/?q=wandtegel",
+   "title": "Just a moment...",
+   "meta_description": null,
+   "metadata": {},
+   "links": [],
+   "emails": [],
+   "phones": []
+  }
+ ]
+}

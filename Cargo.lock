@@ -3441,6 +3441,7 @@ dependencies = [
  "newera-mcp",
  "newera-relay",
  "newera-sh3d",
+ "newera-shop",
  "reqwest",
  "serde",
  "serde_json",
@@ -3621,6 +3622,19 @@ dependencies = [
  "newera-core",
  "thiserror 2.0.21",
  "zip",
+]
+
+[[package]]
+name = "newera-shop"
+version = "3.1.0"
+dependencies = [
+ "axum",
+ "regex-lite",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tokio",
+ "url",
 ]
 
 [[package]]

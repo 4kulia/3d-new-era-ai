@@ -48,6 +48,18 @@ async fn service_full(
     mail: Mail,
     http: Option<reqwest::Client>,
 ) -> Option<(String, AppState)> {
+    service_configured(sites, allowed, google, mail, http, None).await
+}
+
+/// The same, reading shop products through `anysite`.
+async fn service_configured(
+    sites: Vec<String>,
+    allowed: AllowedEmails,
+    google: Option<Google>,
+    mail: Mail,
+    http: Option<reqwest::Client>,
+    anysite: Option<newera_shop::AnySite>,
+) -> Option<(String, AppState)> {
     let Ok(admin) = std::env::var("TEST_DATABASE_URL") else {
         eprintln!("TEST_DATABASE_URL not set: skipping");
         return None;
@@ -84,6 +96,7 @@ async fn service_full(
         }),
         allowed_emails: allowed,
         port: 0,
+        anysite,
     };
     let mut state = AppState::start(config, db).await.expect("startup");
     if let Some(http) = http {
@@ -684,6 +697,28 @@ async fn an_ai_client_is_allowed_in_and_reaches_the_tab() {
         .unwrap();
     assert_eq!(me["email"], "Ana@Example.com");
     assert_eq!(me["plan"]["code"], "free");
+
+    // The service's own tools — the projects, the product library — are
+    // answered by the server while a tab holds the room: the tab is not
+    // asked.
+    let quiet = std::time::Duration::from_millis(400);
+    while tokio::time::timeout(quiet, socket.next()).await.is_ok() {}
+    for (id, name) in [(60, "projects"), (61, "products")] {
+        let answered = tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            call(id, name, json!({})),
+        )
+        .await
+        .unwrap_or_else(|_| panic!("{name} was sent to the tab, which does not answer it"));
+        assert_eq!(answered["isError"], false, "{name}: {answered}");
+        let listed: Value =
+            serde_json::from_str(answered["content"][0]["text"].as_str().unwrap()).unwrap();
+        assert!(listed["rows"].is_array(), "{name}: {listed}");
+    }
+    assert!(
+        tokio::time::timeout(quiet, socket.next()).await.is_err(),
+        "the tab received a call for a tool the server answers"
+    );
 
     // The call goes down to the tab and its answer comes back.
     let calling = tokio::spawn({
@@ -2649,4 +2684,729 @@ async fn old_and_new_copies_saving_at_once_do_not_cross() {
             "round {round}: status {status}"
         );
     }
+}
+
+// ---------------------------------------------------------------- products
+
+/// `AnySite`, stood in for on a local port with the responses recorded from
+/// the real one (`newera-shop/tests/fixtures/`): each answer is chosen by
+/// endpoint and by a word of the link asked for, and every call is counted.
+async fn anysite(
+    answers: &[(&'static str, &'static str, &'static str)],
+) -> (
+    newera_shop::AnySite,
+    std::sync::Arc<std::sync::atomic::AtomicUsize>,
+) {
+    let fixtures =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../newera-shop/tests/fixtures");
+    let records = answers
+        .iter()
+        .map(|(endpoint, word, name)| {
+            let record: Value =
+                serde_json::from_str(&std::fs::read_to_string(fixtures.join(name)).unwrap())
+                    .unwrap();
+            ((*endpoint).to_owned(), (*word).to_owned(), record)
+        })
+        .collect();
+    anysite_of(records, std::time::Duration::ZERO).await
+}
+
+/// The same from records, each answer coming `delay` after the call.
+async fn anysite_of(
+    answers: Vec<(String, String, Value)>,
+    delay: std::time::Duration,
+) -> (
+    newera_shop::AnySite,
+    std::sync::Arc<std::sync::atomic::AtomicUsize>,
+) {
+    use axum::extract::{Path, State};
+    use axum::response::IntoResponse;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    let answers = Arc::new(answers);
+    let calls = Arc::new(AtomicUsize::new(0));
+    let app = axum::Router::new()
+        .route(
+            "/api/{*endpoint}",
+            axum::routing::post(
+                move |State((answers, calls)): State<StandIn>,
+                      Path(endpoint): Path<String>,
+                      headers: axum::http::HeaderMap,
+                      axum::Json(body): axum::Json<Value>| async move {
+                    calls.fetch_add(1, Ordering::SeqCst);
+                    tokio::time::sleep(delay).await;
+                    assert_eq!(headers["access-token"], "anysite-test-key");
+                    let link = body["url"]
+                        .as_str()
+                        .or(body["product"].as_str())
+                        .unwrap_or_default()
+                        .to_owned();
+                    let (_, _, record) = answers
+                        .iter()
+                        .find(|(e, word, _)| *e == endpoint && link.contains(word.as_str()))
+                        .unwrap_or_else(|| panic!("no recorded answer for {endpoint} {link}"));
+                    let mut response = (
+                        axum::http::StatusCode::from_u16(
+                            u16::try_from(record["status"].as_u64().unwrap()).unwrap(),
+                        )
+                        .unwrap(),
+                        axum::Json(record["body"].clone()),
+                    )
+                        .into_response();
+                    for (name, value) in record["headers"].as_object().unwrap() {
+                        response.headers_mut().insert(
+                            axum::http::HeaderName::from_bytes(name.as_bytes()).unwrap(),
+                            value.as_str().unwrap().parse().unwrap(),
+                        );
+                    }
+                    response
+                },
+            ),
+        )
+        .with_state((answers, calls.clone()));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let at = format!("http://{}", listener.local_addr().unwrap());
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    (newera_shop::AnySite::new(&at, "anysite-test-key"), calls)
+}
+
+/// The stand-in's recorded answers by endpoint and word, and its call count.
+type StandIn = (
+    std::sync::Arc<Vec<(String, String, Value)>>,
+    std::sync::Arc<std::sync::atomic::AtomicUsize>,
+);
+
+/// The recorded shops, as the stand-in answers them.
+const SHOPS: &[(&str, &str, &str)] = &[
+    ("ikea/products", "ikea.com", "ikea_billy_00263850.json"),
+    (
+        "webparser/parse",
+        "hornbach.nl",
+        "hornbach_tile_10656129.parse.json",
+    ),
+    (
+        "webparser/render",
+        "hornbach.nl",
+        "hornbach_tile_10656129.render.json",
+    ),
+    (
+        "webparser/parse",
+        "tegeldepot.nl",
+        "tegeldepot_search.parse.json",
+    ),
+    (
+        "webparser/render",
+        "tegeldepot.nl",
+        "tegeldepot_search.render.json",
+    ),
+];
+
+async fn shop_service() -> Option<(
+    String,
+    AppState,
+    std::sync::Arc<std::sync::atomic::AtomicUsize>,
+)> {
+    let (anysite, calls) = anysite(SHOPS).await;
+    shop_service_on(anysite, calls).await
+}
+
+async fn shop_service_on(
+    anysite: newera_shop::AnySite,
+    calls: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+) -> Option<(
+    String,
+    AppState,
+    std::sync::Arc<std::sync::atomic::AtomicUsize>,
+)> {
+    let (base, state) = service_configured(
+        vec![SITE.to_owned()],
+        AllowedEmails::default(),
+        None,
+        Mail::Log,
+        None,
+        Some(anysite),
+    )
+    .await?;
+    Some((base, state, calls))
+}
+
+/// A tool's answer, as the fields a client reads.
+fn fields_of(answer: &Value) -> Value {
+    assert_eq!(answer["isError"], false, "{answer}");
+    let text: Value = serde_json::from_str(answer["content"][0]["text"].as_str().unwrap()).unwrap();
+    assert_eq!(answer["structuredContent"], text, "the fields are the text");
+    text
+}
+
+fn calls_made(calls: &std::sync::atomic::AtomicUsize) -> usize {
+    calls.load(std::sync::atomic::Ordering::SeqCst)
+}
+
+/// An IKEA link is read through the adapter once; the same article under
+/// another link is the product already kept, with no second fetch; the
+/// library lists it, finds it by a word, and shows it whole.
+#[tokio::test]
+async fn an_imported_product_is_read_once_and_kept() {
+    let Some((base, state, calls)) = shop_service().await else {
+        return;
+    };
+    let (_, access, _) = credentials(&base, &state, "buyer@example.com").await;
+    let link = "https://www.ikea.com/nl/nl/p/billy-boekenkast-wit-00263850/";
+    let first = fields_of(&tool(&base, &access, "import_product", json!({"url": link})).await);
+    let id = first["id"].as_str().unwrap().to_owned();
+    assert_eq!(
+        first,
+        json!({
+            "id": id,
+            "shop": "ikea.com",
+            "market": "nl",
+            "sku": "00263850",
+            "url": link,
+            "kind": "furniture",
+            "title": "BILLY Boekenkast, wit, 80x28x202 cm",
+            "fields": first["fields"],
+            "missing": [],
+            "fetched_at": first["fetched_at"],
+            "prices": [["49.99", "EUR", "piece", "adapter", first["prices"][0][4]]],
+            "stored": false,
+            "fetched": [["ikea/products", "ok", 5]],
+        })
+    );
+    assert_eq!(
+        first["fields"]["price"],
+        json!({"value": "49.99", "evidence": "adapter", "from": "previous_price (price is the IKEA Family price)"})
+    );
+    assert_eq!(first["fields"]["width_cm"]["value"], 80.0);
+    assert_eq!(calls_made(&calls), 1);
+
+    let again = fields_of(
+        &tool(
+            &base,
+            &access,
+            "import_product",
+            json!({"url": format!("{link}?utm_source=mail#reviews")}),
+        )
+        .await,
+    );
+    assert_eq!(again["id"], first["id"]);
+    assert_eq!(
+        (&again["stored"], &again["fetched"]),
+        (&json!(true), &json!([]))
+    );
+    assert_eq!(
+        calls_made(&calls),
+        1,
+        "a product already kept is not fetched again"
+    );
+
+    let listed = fields_of(&tool(&base, &access, "products", json!({})).await);
+    assert_eq!(
+        listed,
+        json!({
+            "rows": [[id, "furniture", "ikea.com", "BILLY Boekenkast, wit, 80x28x202 cm", "49.99", "EUR", "piece", []]],
+            "columns": ["id", "kind", "shop", "title", "price", "currency", "sale_unit", "missing"],
+        })
+    );
+    let found = fields_of(&tool(&base, &access, "products", json!({"q": "billy"})).await);
+    assert_eq!(found["rows"].as_array().unwrap().len(), 1);
+    let none = fields_of(&tool(&base, &access, "products", json!({"q": "sofa"})).await);
+    assert_eq!(none["rows"], json!([]));
+    let whole = fields_of(&tool(&base, &access, "products", json!({"id": id})).await);
+    let mut expected = first.clone();
+    expected.as_object_mut().unwrap().remove("stored");
+    expected.as_object_mut().unwrap().remove("fetched");
+    assert_eq!(whole, expected);
+
+    // Another account has a library of its own.
+    let (_, other, _) = credentials(&base, &state, "neighbour@example.com").await;
+    let theirs = fields_of(&tool(&base, &other, "products", json!({})).await);
+    assert_eq!(theirs["rows"], json!([]));
+    let unseen = tool(&base, &other, "products", json!({"id": id})).await;
+    assert_eq!(unseen["isError"], true);
+}
+
+/// A shop behind a bot check is parsed, then rendered; what neither shows
+/// is missing, and the agent fills it. A refresh reads the shop again and
+/// keeps the agent's values where the shop still shows nothing.
+#[tokio::test]
+async fn the_agent_fills_what_the_shop_did_not_show() {
+    let Some((base, state, calls)) = shop_service().await else {
+        return;
+    };
+    let (_, access, _) = credentials(&base, &state, "buyer@example.com").await;
+    let link = "https://www.tegeldepot.nl/wandtegels/wandtegel-wit-30x60.html";
+    let imported = fields_of(
+        &tool(
+            &base,
+            &access,
+            "import_product",
+            json!({"url": link, "kind": "finish"}),
+        )
+        .await,
+    );
+    let id = imported["id"].as_str().unwrap().to_owned();
+    assert_eq!(imported["kind"], "finish");
+    assert_eq!(imported["fields"], json!({}));
+    assert!(
+        imported.get("title").is_none(),
+        "an unknown title is left out, not null: the output schema says string"
+    );
+    assert_eq!(
+        imported["missing"],
+        json!(["title", "price", "finish_type"])
+    );
+    assert_eq!(
+        imported["fetched"],
+        json!([
+            ["webparser/parse", "ok", 1],
+            [
+                "webparser/render",
+                "AnySite could not reach the page: Failed to fetch URL. Website is not accessible",
+                10
+            ]
+        ])
+    );
+    assert_eq!(calls_made(&calls), 2);
+
+    let set = fields_of(
+        &tool(
+            &base,
+            &access,
+            "edit_products",
+            json!({"id": id, "action": "set", "fields": {"title": "Wandtegel wit 30x60", "price": "31,95", "finish_type": "covering"}}),
+        )
+        .await,
+    );
+    assert_eq!(
+        set["missing"],
+        json!(["pack_m2"]),
+        "a covering needs its m² per pack"
+    );
+    assert_eq!(
+        set["fields"]["price"],
+        json!({"value": "31.95", "evidence": "agent", "from": "edit_products"})
+    );
+    let done = fields_of(
+        &tool(
+            &base,
+            &access,
+            "edit_products",
+            json!({"id": id, "action": "set", "fields": {"pack_m2": 1.44}}),
+        )
+        .await,
+    );
+    assert_eq!(done["missing"], json!([]));
+    assert_eq!(done["prices"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        &done["prices"][0].as_array().unwrap()[..4],
+        [json!("31.95"), json!("EUR"), Value::Null, json!("agent")]
+    );
+
+    for (args, says) in [
+        (
+            json!({"id": id, "action": "set", "fields": {"price": "free"}}),
+            "price takes an amount above zero",
+        ),
+        (
+            json!({"id": id, "action": "set", "fields": {"colour_code": "x"}}),
+            "no field colour_code",
+        ),
+        (json!({"id": id, "action": "set"}), "fields is an object"),
+        (
+            json!({"id": id, "action": "refresh", "fields": {}}),
+            "`fields` is for `set`, not `refresh`",
+        ),
+        (json!({"id": "nope", "action": "remove"}), "no product nope"),
+        (
+            json!({"url": link, "link": link}),
+            "unknown argument `link`",
+        ),
+    ] {
+        let name = if args.get("url").is_some() {
+            "import_product"
+        } else {
+            "edit_products"
+        };
+        let answer = tool(&base, &access, name, args.clone()).await;
+        assert_eq!(answer["isError"], true, "{args}");
+        let text = answer["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains(says), "{args}: {text}");
+    }
+
+    let before: (i64, Value) = sqlx::query_as(
+        "select extract(epoch from fetched_at)::bigint, fetches from products where id = $1",
+    )
+    .bind(&id)
+    .fetch_one(&state.db)
+    .await
+    .unwrap();
+    let refreshed = fields_of(
+        &tool(
+            &base,
+            &access,
+            "edit_products",
+            json!({"id": id, "action": "refresh"}),
+        )
+        .await,
+    );
+    assert_eq!(calls_made(&calls), 4, "a refresh reads the shop again");
+    assert_eq!(
+        refreshed["fields"]["price"]["evidence"], "agent",
+        "the shop still shows no price"
+    );
+    assert_eq!(refreshed["missing"], json!([]));
+    assert_eq!(
+        refreshed["fetched_at"], before.0,
+        "a read that brought nothing is not a reading of the shop"
+    );
+    let after: Value = sqlx::query_scalar("select fetches from products where id = $1")
+        .bind(&id)
+        .fetch_one(&state.db)
+        .await
+        .unwrap();
+    let mut both = before.1.as_array().unwrap().clone();
+    both.extend(refreshed["fetched"].as_array().unwrap().clone());
+    assert_eq!(
+        after,
+        json!(both),
+        "the attempt is added to the earlier fetches"
+    );
+    assert_eq!(after.as_array().unwrap().len(), 4);
+
+    let removed = fields_of(
+        &tool(
+            &base,
+            &access,
+            "edit_products",
+            json!({"id": id, "action": "remove"}),
+        )
+        .await,
+    );
+    assert_eq!(removed, json!({"id": id, "removed": true}));
+    let left = fields_of(&tool(&base, &access, "products", json!({})).await);
+    assert_eq!(left["rows"], json!([]));
+    let history: i64 =
+        sqlx::query_scalar("select count(*) from product_prices where product_id = $1")
+            .bind(&id)
+            .fetch_one(&state.db)
+            .await
+            .unwrap();
+    assert_eq!(history, 0, "the history goes with the product");
+}
+
+/// A refresh of a page the shop does show replaces the price and what goes
+/// with it, adds the day's price to the history, and leaves the rest of the
+/// product — the agent's corrections — as it was.
+#[tokio::test]
+async fn a_refresh_adds_the_days_price() {
+    let Some((base, state, calls)) = shop_service().await else {
+        return;
+    };
+    let (_, access, _) = credentials(&base, &state, "buyer@example.com").await;
+    let link =
+        "https://www.hornbach.nl/p/wandtegel-elegance-wit-mat-30-x-60-cm-gerectificeerd/10656129/";
+    let imported = fields_of(&tool(&base, &access, "import_product", json!({"url": link})).await);
+    let id = imported["id"].as_str().unwrap().to_owned();
+    assert_eq!(imported["kind"], "finish");
+    assert_eq!(imported["missing"], json!([]));
+    assert_eq!(imported["fields"]["pack_m2"]["value"], 1.62);
+    assert_eq!(
+        imported["fetched"],
+        json!([["webparser/parse", "ok", 1], ["webparser/render", "ok", 10]])
+    );
+    // The agent's price, from before the shop showed one, is replaced by
+    // what the shop shows now; its corrections of the title and the pack
+    // are not the day's price and stay.
+    let set = tool(
+        &base,
+        &access,
+        "edit_products",
+        json!({"id": id, "action": "set", "fields": {"price": "17.00", "title": "Mijn tegel", "pack_m2": 1.5}}),
+    )
+    .await;
+    assert_eq!(fields_of(&set)["fields"]["price"]["evidence"], "agent");
+    let refreshed = fields_of(
+        &tool(
+            &base,
+            &access,
+            "edit_products",
+            json!({"id": id, "action": "refresh"}),
+        )
+        .await,
+    );
+    assert_eq!(calls_made(&calls), 4);
+    assert_eq!(
+        refreshed["fields"]["price"],
+        json!({"value": "18.13", "evidence": "text", "from": "Komt overeen met 18,13 € per Pak"})
+    );
+    assert_eq!(refreshed["title"], "Mijn tegel");
+    assert_eq!(
+        refreshed["fields"]["pack_m2"],
+        json!({"value": 1.5, "evidence": "agent", "from": "edit_products"})
+    );
+    let prices: Vec<Value> = refreshed["prices"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| json!(p.as_array().unwrap()[..4]))
+        .collect();
+    assert_eq!(
+        prices,
+        [
+            json!(["18.13", "EUR", "pack", "text"]),
+            json!(["17.00", "EUR", "pack", "agent"]),
+            json!(["18.13", "EUR", "pack", "text"])
+        ]
+    );
+}
+
+/// Without an `AnySite` key the server says product import is not set up,
+/// and the library still answers.
+#[tokio::test]
+async fn without_an_anysite_key_import_says_so() {
+    let Some((base, state)) = service().await else {
+        return;
+    };
+    let (_, access, _) = credentials(&base, &state, "buyer@example.com").await;
+    let answer = tool(
+        &base,
+        &access,
+        "import_product",
+        json!({"url": "https://www.praxis.nl/a/10043467"}),
+    )
+    .await;
+    assert_eq!(
+        answer,
+        json!({"content": [{"type": "text", "text": newera_cloud::products::NOT_CONFIGURED}], "isError": true})
+    );
+    let listed = fields_of(&tool(&base, &access, "products", json!({})).await);
+    assert_eq!(listed["rows"], json!([]));
+    let listing = mcp(
+        &base,
+        &access,
+        json!({"jsonrpc": "2.0", "id": 1, "method": "tools/list"}),
+    )
+    .await
+    .1;
+    let names: Vec<&str> = listing["result"]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["name"].as_str().unwrap())
+        .collect();
+    for name in ["import_product", "products", "edit_products", "projects"] {
+        assert!(names.contains(&name), "{name}");
+    }
+}
+
+/// A client that gives up on a slow import does not lose what was paid
+/// for: the fetch goes on and keeps the product, and the call that comes
+/// next finds it — waiting for the fetch if it is still running — without
+/// a second fetch.
+#[tokio::test]
+async fn an_import_the_client_gave_up_on_is_kept() {
+    let fixtures =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../newera-shop/tests/fixtures");
+    let record = |name: &str| -> Value {
+        serde_json::from_str(&std::fs::read_to_string(fixtures.join(name)).unwrap()).unwrap()
+    };
+    let (anysite, calls) = anysite_of(
+        vec![
+            (
+                "webparser/parse".to_owned(),
+                "hornbach.nl".to_owned(),
+                record("hornbach_tile_10656129.parse.json"),
+            ),
+            (
+                "webparser/render".to_owned(),
+                "hornbach.nl".to_owned(),
+                record("hornbach_tile_10656129.render.json"),
+            ),
+        ],
+        std::time::Duration::from_millis(700),
+    )
+    .await;
+    let Some((base, state, calls)) = shop_service_on(anysite, calls).await else {
+        return;
+    };
+    let (_, access, _) = credentials(&base, &state, "buyer@example.com").await;
+    let link =
+        "https://www.hornbach.nl/p/wandtegel-elegance-wit-mat-30-x-60-cm-gerectificeerd/10656129/";
+    let args = json!({"url": link});
+    let gave_up = tokio::time::timeout(
+        std::time::Duration::from_millis(300),
+        tool(&base, &access, "import_product", args.clone()),
+    )
+    .await;
+    assert!(
+        gave_up.is_err(),
+        "the import should still have been running"
+    );
+    // Asked again while the first fetch runs: the same fetch, not a second.
+    let again = fields_of(&tool(&base, &access, "import_product", args.clone()).await);
+    assert_eq!(
+        (&again["stored"], &again["fetched"]),
+        (&json!(true), &json!([]))
+    );
+    assert_eq!(again["missing"], json!([]));
+    assert_eq!(calls_made(&calls), 2, "parse and render, once");
+    let kept = fields_of(&tool(&base, &access, "products", json!({})).await);
+    assert_eq!(kept["rows"].as_array().unwrap().len(), 1);
+    // Asked together, two calls make one fetch.
+    let link = "https://www.hornbach.nl/p/andere-tegel/10656129/?variant=2";
+    let (a, b) = tokio::join!(
+        tool(&base, &access, "import_product", json!({"url": link})),
+        tool(&base, &access, "import_product", json!({"url": link})),
+    );
+    let (a, b) = (fields_of(&a), fields_of(&b));
+    assert_eq!(a["id"], b["id"]);
+    assert_eq!(
+        [
+            a["stored"].as_bool().unwrap(),
+            b["stored"].as_bool().unwrap()
+        ]
+        .iter()
+        .filter(|stored| **stored)
+        .count(),
+        1,
+        "one call fetched, the other waited"
+    );
+    assert_eq!(calls_made(&calls), 4);
+    assert_eq!(
+        a["sku"], "10656129?variant=2",
+        "the variant is another article"
+    );
+}
+
+/// `AnySite` failing on the parse is an error of the import: no render is
+/// bought, nothing is kept, and the answer says to call again.
+#[tokio::test]
+async fn an_import_anysite_failed_on_buys_nothing_more() {
+    let fixtures =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../newera-shop/tests/fixtures");
+    let render: Value = serde_json::from_str(
+        &std::fs::read_to_string(fixtures.join("hornbach_tile_10656129.render.json")).unwrap(),
+    )
+    .unwrap();
+    let busy = json!({"status": 429, "headers": {}, "body": {"detail": "Too many requests"}});
+    let (anysite, calls) = anysite_of(
+        vec![
+            ("webparser/parse".to_owned(), "busy.nl".to_owned(), busy),
+            ("webparser/render".to_owned(), "busy.nl".to_owned(), render),
+        ],
+        std::time::Duration::ZERO,
+    )
+    .await;
+    let Some((base, state, calls)) = shop_service_on(anysite, calls).await else {
+        return;
+    };
+    let (_, access, _) = credentials(&base, &state, "buyer@example.com").await;
+    let answer = tool(
+        &base,
+        &access,
+        "import_product",
+        json!({"url": "https://www.busy.nl/p/tegel/12345678"}),
+    )
+    .await;
+    assert_eq!(answer["isError"], true, "{answer}");
+    let text = answer["content"][0]["text"].as_str().unwrap();
+    assert!(
+        text.contains("limiting calls") && text.contains("call again"),
+        "{text}"
+    );
+    assert_eq!(
+        calls_made(&calls),
+        1,
+        "no render after a parse AnySite failed"
+    );
+    let kept = fields_of(&tool(&base, &access, "products", json!({})).await);
+    assert_eq!(kept["rows"], json!([]), "an empty page is not kept");
+}
+
+/// A refresh that reads a price replaces the whole commercial set: the
+/// IKEA Family offer that ended is no longer the product's member price.
+#[tokio::test]
+async fn a_refresh_that_reads_a_price_drops_the_offer_the_shop_no_longer_shows() {
+    let fixtures =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../newera-shop/tests/fixtures");
+    let family: Value = serde_json::from_str(
+        &std::fs::read_to_string(fixtures.join("ikea_billy_00263850.json")).unwrap(),
+    )
+    .unwrap();
+    let mut plain = family.clone();
+    plain["body"][0]["price"] = json!(49.99);
+    plain["body"][0]["price_tag"] = Value::Null;
+    let (anysite, calls) = anysite_of(
+        vec![
+            ("ikea/products".to_owned(), "boekenkast".to_owned(), family),
+            ("ikea/products".to_owned(), "nofamily".to_owned(), plain),
+        ],
+        std::time::Duration::ZERO,
+    )
+    .await;
+    let Some((base, state, _)) = shop_service_on(anysite, calls).await else {
+        return;
+    };
+    let (_, access, _) = credentials(&base, &state, "buyer@example.com").await;
+    let link = "https://www.ikea.com/nl/nl/p/billy-boekenkast-wit-00263850/";
+    let first = fields_of(&tool(&base, &access, "import_product", json!({"url": link})).await);
+    let id = first["id"].as_str().unwrap().to_owned();
+    assert_eq!(first["fields"]["member_price"]["value"], "42.49");
+    // The agent's own entry outside the commercial set, and a unit the
+    // shop no longer sells in.
+    let set = tool(
+        &base,
+        &access,
+        "edit_products",
+        json!({"id": id, "action": "set", "fields": {"colour": "mijn wit", "sale_unit": "pack"}}),
+    )
+    .await;
+    fields_of(&set);
+    let history = |state: &AppState| {
+        let db = state.db.clone();
+        let id = id.clone();
+        async move {
+            sqlx::query_scalar::<_, i64>(
+                "select count(*) from product_prices where product_id = $1",
+            )
+            .bind(id)
+            .fetch_one(&db)
+            .await
+            .unwrap()
+        }
+    };
+    let before = history(&state).await;
+    // The shop's page, as it reads once the offer has ended.
+    sqlx::query("update products set url = $2 where id = $1")
+        .bind(&id)
+        .bind("https://www.ikea.com/nl/nl/p/billy-nofamily-00263850/")
+        .execute(&state.db)
+        .await
+        .unwrap();
+    let refreshed = fields_of(
+        &tool(
+            &base,
+            &access,
+            "edit_products",
+            json!({"id": id, "action": "refresh"}),
+        )
+        .await,
+    );
+    assert_eq!(refreshed["fields"]["price"]["value"], "49.99");
+    assert!(
+        refreshed["fields"].get("member_price").is_none(),
+        "{}",
+        refreshed["fields"]
+    );
+    assert_eq!(refreshed["fields"]["width_cm"]["value"], 80.0);
+    assert_eq!(
+        refreshed["fields"]["colour"],
+        json!({"value": "mijn wit", "evidence": "agent", "from": "edit_products"})
+    );
+    assert_eq!(
+        refreshed["fields"]["sale_unit"]["value"], "piece",
+        "the unit goes with the price it qualifies"
+    );
+    assert_eq!(history(&state).await, before + 1, "one price seen");
 }

@@ -10,6 +10,7 @@ mod args;
 mod compact;
 mod edit;
 mod hints;
+mod hosted;
 pub mod output;
 mod schema;
 pub mod surface;

@@ -2600,6 +2600,91 @@
     },
     "title": "Lay a pipe run"
   },
+  "edit_products": {
+    "annotations": {
+      "destructiveHint": true,
+      "openWorldHint": true,
+      "readOnlyHint": false,
+      "title": "Change shop products"
+    },
+    "description": "Change a product in the library. set {fields}: fill in or correct fields (price, pack_m2, width_cm…), kept as the agent's; refresh: read the shop again for today's price, VAT and price per unit, which replace the old ones and are added to the price history (title, size and pack stay as they are); remove: delete it. Reply: the product as products shows it. products reads the library.",
+    "inputSchema": {
+      "properties": {
+        "action": {
+          "description": "`set` fills in or corrects fields; `refresh` reads the shop again for today's price; `remove` deletes the product",
+          "enum": [
+            "set",
+            "refresh",
+            "remove"
+          ],
+          "type": "string"
+        },
+        "fields": {
+          "additionalProperties": true,
+          "description": "For `set`: field → value, e.g. `{\"price\": \"24.54\", \"pack_m2\": 1.62, \"width_cm\": 80}`",
+          "type": "object"
+        },
+        "id": {
+          "description": "The product, as `import_product` or `products` gave it",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "action"
+      ],
+      "type": "object"
+    },
+    "name": "edit_products",
+    "outputSchema": {
+      "properties": {
+        "fetched_at": {
+          "type": "integer"
+        },
+        "fields": {
+          "type": "object"
+        },
+        "id": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string"
+        },
+        "market": {
+          "type": "string"
+        },
+        "missing": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "prices": {
+          "type": "array"
+        },
+        "removed": {
+          "type": "boolean"
+        },
+        "shop": {
+          "type": "string"
+        },
+        "sku": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "url": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "type": "object"
+    },
+    "title": "Change shop products"
+  },
   "edit_variants": {
     "annotations": {
       "destructiveHint": true,
@@ -3575,6 +3660,92 @@
       "type": "object"
     },
     "title": "Read the home"
+  },
+  "import_product": {
+    "annotations": {
+      "destructiveHint": false,
+      "openWorldHint": true,
+      "readOnlyHint": false,
+      "title": "Import a shop product"
+    },
+    "description": "Import a product from a shop's link into the account's library: a piece (a cabinet, a sofa…) or a finish (tile, laminate, paint, wallpaper) with its price, pack and coverage. The same article imported again is the one kept, not fetched twice. Reply: id, shop, kind, fields {name: {value, evidence, from}} — evidence is adapter, text, market or agent — missing (what the shop did not show, for edit_products to fill), fetched (calls made and their credits). products lists the library.",
+    "inputSchema": {
+      "properties": {
+        "kind": {
+          "description": "What it is: a piece that stands in a room, or a finish (tile, laminate, paint, wallpaper). Default: what the shop shows",
+          "enum": [
+            "furniture",
+            "finish"
+          ],
+          "type": "string"
+        },
+        "url": {
+          "description": "The link to the product in the shop, e.g. `https://www.ikea.com/nl/nl/p/…`, `https://www.praxis.nl/…`",
+          "type": "string"
+        }
+      },
+      "required": [
+        "url"
+      ],
+      "type": "object"
+    },
+    "name": "import_product",
+    "outputSchema": {
+      "properties": {
+        "fetched": {
+          "type": "array"
+        },
+        "fetched_at": {
+          "type": "integer"
+        },
+        "fields": {
+          "type": "object"
+        },
+        "id": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string"
+        },
+        "market": {
+          "type": "string"
+        },
+        "missing": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "prices": {
+          "type": "array"
+        },
+        "shop": {
+          "type": "string"
+        },
+        "sku": {
+          "type": "string"
+        },
+        "stored": {
+          "type": "boolean"
+        },
+        "title": {
+          "type": "string"
+        },
+        "url": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "shop",
+        "kind",
+        "fields",
+        "missing",
+        "stored"
+      ],
+      "type": "object"
+    },
+    "title": "Import a shop product"
   },
   "joinery": {
     "annotations": {
@@ -4770,6 +4941,120 @@
       "type": "object"
     },
     "title": "Check the plumbing project"
+  },
+  "products": {
+    "annotations": {
+      "openWorldHint": false,
+      "readOnlyHint": true,
+      "title": "List shop products"
+    },
+    "description": "The account's library of shop products: rows [id, kind, shop, title, price, currency, sale_unit, missing], or with id one product in full — its fields and where each came from, what is missing, and its price history. import_product adds one; edit_products fills fields, fetches today's price or removes one.",
+    "inputSchema": {
+      "properties": {
+        "id": {
+          "description": "One product in full: every field with its evidence, and its price history",
+          "type": "string"
+        },
+        "q": {
+          "description": "Words to find in the title, shop or link",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "name": "products",
+    "outputSchema": {
+      "properties": {
+        "columns": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "fetched_at": {
+          "type": "integer"
+        },
+        "fields": {
+          "type": "object"
+        },
+        "id": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string"
+        },
+        "market": {
+          "type": "string"
+        },
+        "missing": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "prices": {
+          "type": "array"
+        },
+        "rows": {
+          "type": "array"
+        },
+        "shop": {
+          "type": "string"
+        },
+        "sku": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "url": {
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "title": "List shop products"
+  },
+  "projects": {
+    "annotations": {
+      "openWorldHint": false,
+      "readOnlyHint": true,
+      "title": "List your projects"
+    },
+    "description": "The projects kept in the account: rows [name, id, kb, updated, active], the space used and the plan's limits. file action=open switches the active one; action=new starts one.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {},
+      "type": "object"
+    },
+    "name": "projects",
+    "outputSchema": {
+      "properties": {
+        "columns": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "limits": {
+          "type": "object"
+        },
+        "rows": {
+          "type": "array"
+        },
+        "used_kb": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "rows",
+        "columns",
+        "used_kb",
+        "limits"
+      ],
+      "type": "object"
+    },
+    "title": "List your projects"
   },
   "render_3d": {
     "annotations": {

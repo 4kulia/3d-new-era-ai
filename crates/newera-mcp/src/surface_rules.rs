@@ -30,8 +30,16 @@ const INPUT_CAP: usize = 6_000;
 /// what the type is, in a line.
 const DEF_DESCRIPTION_CAP: usize = 300;
 
-fn surface() -> Vec<(String, Value)> {
+/// Every tool there is: the editor's, and the hosted service's own.
+fn every_tool() -> Vec<rmcp::model::Tool> {
     crate::tools()
+        .into_iter()
+        .chain(crate::hosted::tools())
+        .collect()
+}
+
+fn surface() -> Vec<(String, Value)> {
+    every_tool()
         .into_iter()
         .map(|t| (t.name.to_string(), serde_json::to_value(&t).expect("tool")))
         .collect()
@@ -114,7 +122,7 @@ struct Budget {
 }
 
 fn costs() -> (usize, BTreeMap<String, Cost>) {
-    let tools = crate::tools();
+    let tools = every_tool();
     let total = serde_json::to_string(&tools).expect("json").len();
     let each = surface()
         .into_iter()
@@ -465,13 +473,17 @@ fn unknown_arguments_are_refused_by_name() {
         if TOO_SLOW_TO_PROBE.contains(&name.as_str()) {
             continue;
         }
-        let document = SharedDocument::new(Document::default());
-        let answer = crate::call(
-            document,
-            &name,
-            serde_json::json!({"zz_not_an_argument": 1}),
-        );
-        let named = matches!(&answer, Err(why) if why.contains("zz_not_an_argument"));
+        let probe = serde_json::json!({"zz_not_an_argument": 1});
+        // The hosted service checks its own tools the same way, before it
+        // runs them.
+        let named = if crate::surface::HOSTED_ONLY.contains(&name.as_str()) {
+            crate::surface::unknown_hosted_argument(&name, &probe)
+                .is_some_and(|why| why.contains("zz_not_an_argument"))
+        } else {
+            let document = SharedDocument::new(Document::default());
+            let answer = crate::call(document, &name, probe);
+            matches!(&answer, Err(why) if why.contains("zz_not_an_argument"))
+        };
         if !named {
             loose.insert(name);
         }
@@ -605,6 +617,10 @@ struct Search {
     floor: Floor,
     /// `[query, tool]`: what an agent searches for, and the tool that answers.
     queries: Vec<(String, String)>,
+    /// `[query, why]`: requests the desktop answers and the hosted service
+    /// cannot, so they are not ranked among the hosted service's tools.
+    #[serde(default)]
+    not_on_cloud: Vec<(String, String)>,
     /// `[tool, tool, why]`: pairs allowed to read alike, and why they must.
     alike: Vec<(String, String, String)>,
 }
@@ -618,48 +634,96 @@ fn search_fixture() -> Search {
 
 /// A client that defers tool definitions shows the model only the names and
 /// lets it search the rest. A tool its request cannot find is a tool that
-/// does not exist, however good it is.
+/// does not exist, however good it is. Each place is searched as its client
+/// sees it. The editor's tools hold the floor on the desktop and on the
+/// hosted service, where the service's own tools (`projects`, `import_product`…)
+/// compete with them. The service's own tools are searched where they are
+/// offered, and each of their requests finds its tool in the first three.
 #[test]
 fn a_tool_search_finds_the_right_tool() {
-    let tools = surface();
-    let index = Index::new(&tools);
     let fixture = search_fixture();
-    let names: BTreeSet<&str> = tools.iter().map(|(n, _)| n.as_str()).collect();
-    let (mut top3, mut top5) = (0.0, 0.0);
-    let mut misses = Vec::new();
+    let places = [
+        (
+            "desktop",
+            crate::tools()
+                .into_iter()
+                .map(|t| (t.name.to_string(), serde_json::to_value(&t).expect("tool")))
+                .collect::<Vec<_>>(),
+        ),
+        (
+            "hosted",
+            crate::surface::tools(crate::Transport::Cloud)
+                .into_iter()
+                .map(|t| (t["name"].as_str().unwrap_or_default().to_owned(), t))
+                .collect(),
+        ),
+    ];
     for (query, tool) in &fixture.queries {
         assert!(
-            names.contains(tool.as_str()),
+            places
+                .iter()
+                .any(|(_, tools)| tools.iter().any(|(n, _)| n == tool)),
             "query \"{query}\" expects `{tool}`, which is not a tool"
         );
-        let ranked = index.rank(query);
-        let at = ranked.iter().position(|n| n == tool).unwrap_or(usize::MAX);
-        if at < 3 {
-            top3 += 1.0;
+    }
+    // What is ranked where, and the floor each holds: the desktop's tools
+    // among the desktop's, the editor's tools among the hosted service's
+    // too (its own tools compete with them there), and the service's own
+    // tools among the hosted service's.
+    let groups = [
+        ("desktop", 0, Some(false), None),
+        ("hosted, editor tools", 1, Some(false), None),
+        ("hosted, own tools", 1, Some(true), Some((1.0, 1.0))),
+    ];
+    let mut worse = Vec::new();
+    for (place, at, own_tools, fixed) in groups {
+        let tools = &places[at].1;
+        let index = Index::new(tools);
+        let names: BTreeSet<&str> = tools.iter().map(|(n, _)| n.as_str()).collect();
+        let (mut top3, mut top5, mut n) = (0.0, 0.0, 0.0);
+        let mut misses = Vec::new();
+        for (query, tool) in &fixture.queries {
+            let own = crate::surface::HOSTED_ONLY.contains(&tool.as_str());
+            let cannot =
+                place.starts_with("hosted") && fixture.not_on_cloud.iter().any(|(q, _)| q == query);
+            if !names.contains(tool.as_str()) || Some(own) != own_tools || cannot {
+                continue;
+            }
+            n += 1.0;
+            let ranked = index.rank(query);
+            let found = ranked.iter().position(|n| n == tool).unwrap_or(usize::MAX);
+            if found < 3 {
+                top3 += 1.0;
+            }
+            // The service's own tools hold a floor of the first three alone.
+            if found < 5 && (found < 3 || fixed.is_none()) {
+                top5 += 1.0;
+            }
+            if found >= 3 {
+                misses.push(format!(
+                    "\"{query}\" → `{tool}` ranked {}; first: {}",
+                    found.saturating_add(1),
+                    ranked[..3].join(", ")
+                ));
+            }
         }
-        if at < 5 {
-            top5 += 1.0;
-        } else {
-            misses.push(format!(
-                "\"{query}\" → `{tool}` ranked {}; first: {}",
-                at.saturating_add(1),
-                ranked[..3].join(", ")
+        let (top3, top5) = (top3 / n, top5 / n);
+        println!("{place}: top3 {top3:.3} top5 {top5:.3} over {n} queries");
+        for miss in &misses {
+            println!("  {miss}");
+        }
+        let (floor3, floor5) = fixed.unwrap_or((fixture.floor.top3, fixture.floor.top5));
+        if top3 + 1e-9 < floor3 || top5 + 1e-9 < floor5 {
+            worse.push(format!(
+                "{place}: top3 {top3:.3} (floor {floor3}), top5 {top5:.3} (floor {floor5}); misses:\n  {}",
+                misses.join("\n  ")
             ));
         }
     }
-    #[allow(clippy::cast_precision_loss)]
-    let n = fixture.queries.len() as f64;
-    let (top3, top5) = (top3 / n, top5 / n);
-    println!("top3 {top3:.3} top5 {top5:.3} over {n} queries");
-    for miss in &misses {
-        println!("  {miss}");
-    }
     assert!(
-        top3 + 1e-9 >= fixture.floor.top3 && top5 + 1e-9 >= fixture.floor.top5,
-        "tool search got worse: top3 {top3:.3} (floor {}), top5 {top5:.3} (floor {}); misses:\n  {}",
-        fixture.floor.top3,
-        fixture.floor.top5,
-        misses.join("\n  ")
+        worse.is_empty(),
+        "tool search got worse: {}",
+        worse.join("\n")
     );
 }
 

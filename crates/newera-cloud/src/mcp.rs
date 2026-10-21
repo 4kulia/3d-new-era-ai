@@ -94,27 +94,11 @@ fn failure(id: &Value, code: i32, message: &str) -> Value {
 }
 
 /// The tools a client sees: the editor's, minus what is only for a desktop,
-/// with the file tools saying what they do here, and the projects list.
+/// with the file tools saying what they do here, and the service's own —
+/// the projects and the product library.
 fn hosted_tools() -> Vec<Value> {
     // What the service offers and how it words it is the MCP crate's to say.
     let mut tools = newera_mcp::surface::tools(newera_mcp::Transport::Cloud);
-    tools.push(json!({
-        "name": newera_mcp::surface::HOSTED_ONLY[0],
-        "title": "List your projects",
-        "description": "The projects kept in the account: rows [name, id, kb, updated, active], the space used and the plan's limits. file action=open switches the active one; action=new starts one.",
-        "inputSchema": {"type": "object", "properties": {}, "additionalProperties": false},
-        "annotations": {"title": "List your projects", "readOnlyHint": true, "openWorldHint": false},
-        "outputSchema": {
-            "type": "object",
-            "properties": {
-                "rows": {"type": "array", "description": "[name, id, kb, updated (unix seconds), active]"},
-                "columns": {"type": "array", "items": {"type": "string"}, "description": "What each row holds"},
-                "used_kb": {"type": "integer", "description": "Space the projects take, kB"},
-                "limits": {"type": "object", "description": "What the account's plan allows"},
-            },
-            "required": ["rows", "columns", "used_kb", "limits"],
-        },
-    }));
     // Every tool here works on the account: say so per tool, the way the
     // OpenAI Apps SDK reads it, so ChatGPT signs the person in first.
     for tool in &mut tools {
@@ -178,17 +162,43 @@ async fn answer(
                 .get("name")
                 .and_then(Value::as_str)
                 .unwrap_or_default();
-            if name != "projects" && !newera_mcp::Transport::Cloud.offers(name) {
+            if !newera_mcp::Transport::Cloud.offers(name) {
                 return Some(result(
                     &id,
                     json!({"content": [{"type": "text", "text": format!("{name} runs only in the desktop app")}], "isError": true}),
                 ));
             }
+            // The service's own tools — the projects, the product library —
+            // are answered here, from the database: never by the tab, and
+            // never by the editor's tools.
+            let hosted = newera_mcp::surface::HOSTED_ONLY.contains(&name);
+            let args = params.get("arguments").cloned().unwrap_or(Value::Null);
+            if hosted && let Some(why) = newera_mcp::surface::unknown_hosted_argument(name, &args) {
+                return Some(result(
+                    &id,
+                    json!({"content": [{"type": "text", "text": why}], "isError": true}),
+                ));
+            }
+            if crate::products::answers(name) {
+                return Some(
+                    match crate::products::call(app, &account.id, name, &args).await {
+                        Ok(mut answer) => {
+                            newera_mcp::output::structure_json(&mut answer);
+                            result(&id, answer)
+                        }
+                        Err(err) => {
+                            tracing::error!("{name}: {err:#}");
+                            result(
+                                &id,
+                                json!({"content": [{"type": "text", "text": format!("{name} failed on the server: {err}")}], "isError": true}),
+                            )
+                        }
+                    },
+                );
+            }
             // The person's own editor, when it is open and signed in; the
-            // cloud project otherwise. `projects` is always the cloud's.
-            if name != "projects"
-                && let Some(room) = app.rooms.owned_by(&account.id)
-            {
+            // cloud project otherwise.
+            if !hosted && let Some(room) = app.rooms.owned_by(&account.id) {
                 // The tab may run an editor older than this service: its
                 // answer gets its fields here, as the engine's do.
                 let mut answer = newera_relay::answer_in(&app.rooms, &room, message).await;
@@ -197,7 +207,6 @@ async fn answer(
                 }
                 return answer;
             }
-            let args = params.get("arguments").cloned().unwrap_or(Value::Null);
             let plan = match crate::accounts::plan_of(&app.db, &account.id).await {
                 Ok(plan) => plan,
                 Err(err) => {
@@ -248,8 +257,8 @@ mod tests {
     use super::*;
 
     /// The instructions name every tool the service lists, its own
-    /// `projects` included: a client that defers definitions shows the model
-    /// only the names and these words.
+    /// included: a client that defers definitions shows the model only the
+    /// names and these words.
     #[test]
     fn the_instructions_name_every_hosted_tool() {
         let said = newera_mcp::surface::instructions(newera_mcp::Transport::Cloud);
@@ -266,7 +275,9 @@ mod tests {
     #[test]
     fn every_hosted_tool_asks_for_the_account() {
         let tools = hosted_tools();
-        assert!(tools.iter().any(|t| t["name"] == "projects"));
+        for name in newera_mcp::surface::HOSTED_ONLY {
+            assert!(tools.iter().any(|t| t["name"] == name), "{name}");
+        }
         for tool in &tools {
             assert_eq!(
                 tool["securitySchemes"],

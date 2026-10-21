@@ -1,0 +1,15 @@
+{
+ "recorded": "2026-10-21",
+ "request": {
+  "method": "POST",
+  "path": "/api/webparser/parse",
+  "body": {
+   "url": "https://example.com"
+  }
+ },
+ "status": 401,
+ "headers": {},
+ "body": {
+  "detail": "Invalid token"
+ }
+}

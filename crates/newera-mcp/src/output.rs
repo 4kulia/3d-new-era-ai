@@ -402,6 +402,41 @@ fn analysis_route() -> Vec<(&'static str, Value)> {
     ]
 }
 
+/// A product of the library, in full.
+fn product_fields() -> Vec<(&'static str, Value)> {
+    vec![
+        (
+            "id",
+            text("The product, for products, edit_products and place"),
+        ),
+        ("shop", text("The shop's domain")),
+        ("market", text("The shop's market, e.g. nl")),
+        (
+            "sku",
+            text("The article: the shop's number, or the link's path"),
+        ),
+        ("url", text("The product's page")),
+        ("kind", text("furniture or finish")),
+        ("title", text("The product's name")),
+        (
+            "fields",
+            object("By name: {value, evidence (adapter, text, market or agent), from}"),
+        ),
+        (
+            "missing",
+            strings("Fields its kind needs that nobody has filled"),
+        ),
+        (
+            "fetched_at",
+            int("When the shop was last read (unix seconds)"),
+        ),
+        (
+            "prices",
+            list("Price history: [price, currency, sale_unit, origin, seen (unix seconds)]"),
+        ),
+    ]
+}
+
 /// The output schema of a tool, by name. `None` for a name nobody has.
 #[allow(clippy::too_many_lines, reason = "one row per tool, like hints")]
 pub(crate) fn schema(name: &str) -> Option<Value> {
@@ -1009,6 +1044,49 @@ pub(crate) fn schema(name: &str) -> Option<Value> {
             ],
             &["kept", "sent"],
         ),
+        // The hosted service's own.
+        "projects" => shape(
+            &[
+                (
+                    "rows",
+                    list("[name, id, kb, updated (unix seconds), active]"),
+                ),
+                ("columns", strings("What each row holds")),
+                ("used_kb", int("Space the projects take, kB")),
+                ("limits", object("What the account's plan allows")),
+            ],
+            &["rows", "columns", "used_kb", "limits"],
+        ),
+        "import_product" => {
+            let mut fields = product_fields();
+            fields.extend([
+                (
+                    "stored",
+                    flag("The article was already in the library: nothing was fetched"),
+                ),
+                ("fetched", list("Calls made: [endpoint, outcome, credits]")),
+            ]);
+            shape(
+                &fields,
+                &["id", "shop", "kind", "fields", "missing", "stored"],
+            )
+        }
+        "products" => {
+            let mut fields = product_fields();
+            fields.extend([
+                (
+                    "rows",
+                    list("[id, kind, shop, title, price, currency, sale_unit, missing]"),
+                ),
+                ("columns", strings("What each row holds")),
+            ]);
+            shape(&fields, &[])
+        }
+        "edit_products" => {
+            let mut fields = product_fields();
+            fields.push(("removed", flag("The product was deleted")));
+            shape(&fields, &["id"])
+        }
         _ => return None,
     })
 }
@@ -1145,7 +1223,7 @@ mod tests {
     /// Every tool has a schema, and it is an object schema a client accepts.
     #[test]
     fn every_tool_has_an_output_schema() {
-        for tool in crate::tools() {
+        for tool in crate::tools().into_iter().chain(crate::hosted::tools()) {
             let schema = tool.output_schema.as_ref().unwrap_or_else(|| {
                 panic!(
                     "{} has no output schema: add it to output::schema",
@@ -1185,7 +1263,7 @@ mod tests {
             }
         }
         let mut missing = Vec::new();
-        for tool in crate::tools() {
+        for tool in crate::tools().into_iter().chain(crate::hosted::tools()) {
             let schema = Value::Object((*tool.input_schema).clone());
             walk(&tool.name, "", &schema, &mut missing);
         }

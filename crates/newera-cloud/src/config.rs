@@ -213,6 +213,10 @@ pub struct Config {
     /// The port to listen on, on every interface of the container; the
     /// Cloudflare tunnel in front is what reaches it.
     pub port: u16,
+    /// `AnySite`, where shop products are read, from `ANYSITE_API_KEY` (and
+    /// `ANYSITE_BASE_URL`, the CLI's name, for a stand-in); `None` leaves
+    /// product import off and everything else working.
+    pub anysite: Option<newera_shop::AnySite>,
 }
 
 impl std::fmt::Debug for Config {
@@ -227,6 +231,7 @@ impl std::fmt::Debug for Config {
             .field("buymeacoffee", &self.buymeacoffee)
             .field("allowed_emails", &self.allowed_emails)
             .field("port", &self.port)
+            .field("anysite", &self.anysite)
             .finish()
     }
 }
@@ -277,6 +282,14 @@ impl Config {
             var("NEWERA_EDITOR_URL").unwrap_or_else(|| "https://3dneweraai.com/app/".to_owned());
         let buymeacoffee = BuyMeACoffee::from_env(&var)?;
         let allowed_emails = AllowedEmails::from_var(std::env::var("NEWERA_ALLOWED_EMAILS"))?;
+        let anysite = var("ANYSITE_API_KEY").map(|key| {
+            let base = var("ANYSITE_BASE_URL")
+                .unwrap_or_else(|| newera_shop::anysite::BASE_URL.to_owned());
+            newera_shop::AnySite::new(&base, key.trim())
+        });
+        if anysite.is_none() {
+            tracing::warn!("no ANYSITE_API_KEY: product import is off");
+        }
         let port = var("PORT")
             .map(|p| p.parse().context("PORT"))
             .transpose()?
@@ -291,6 +304,7 @@ impl Config {
             buymeacoffee,
             allowed_emails,
             port,
+            anysite,
         })
     }
 

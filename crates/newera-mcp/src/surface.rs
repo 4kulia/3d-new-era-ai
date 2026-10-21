@@ -11,8 +11,10 @@
 
 use serde_json::{Value, json};
 
-/// Tools the hosted service adds of its own: the account's projects.
-pub const HOSTED_ONLY: [&str; 1] = ["projects"];
+/// Tools the hosted service adds of its own and answers from its database:
+/// the account's projects and its library of shop products. Defined in
+/// `hosted.rs`; never run by [`crate::call`].
+pub const HOSTED_ONLY: [&str; 4] = ["projects", "import_product", "products", "edit_products"];
 
 /// Where the tools are served.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -44,6 +46,9 @@ impl Transport {
     /// Whether this place offers `tool`: lists it, and runs it when called.
     #[must_use]
     pub fn offers(self, tool: &str) -> bool {
+        if HOSTED_ONLY.contains(&tool) {
+            return self == Self::Cloud;
+        }
         self == Self::Native || !DESKTOP_ONLY.contains(&tool)
     }
 
@@ -54,7 +59,7 @@ impl Transport {
                 "Start or keep the project in this browser tab. new: an empty project in place of this one. save {path?}: downloads a .newera backup; path supplies a filename only; reports download_started (not disk confirmation) and autosave recovery status, and no server file is written. open reads files on a desktop only.",
             ),
             (Self::Cloud, "file") => Some(
-                "Start, open or keep the account's projects. new {name?}: a new, empty project, made the active one. open {path}: one of the account's projects by name (projects lists them), made the active one. save {path?}: keeps the active project now — it is also kept after every change; path renames it. With the editor open and signed in at 3dneweraai.com/app, calls reach that tab instead: save downloads a .newera backup there, and open reads files on a desktop only.",
+                "Start, open or keep the account's projects. new {name?}: a new, empty floor plan project, made the active one. open {path}: one of the account's projects by name (projects lists them), made the active one. save {path?}: keeps the active project now — it is also kept after every change; path renames it. With the editor open and signed in at 3dneweraai.com/app, calls reach that tab instead: save downloads a .newera backup there, and open reads files on a desktop only.",
             ),
             (Self::Cloud, "export") => Some(
                 "Export the active project to a file, by the extension of path. what=plan (default): .pdf (A3; scale=50/100 or fit), .svg or .png, or the 3D model as .glb or .obj. what=cut_list: the joinery's cut list as .csv, or .dxf/.svg sheets. Reply: a link to the file, good for a day.",
@@ -64,11 +69,13 @@ impl Transport {
     }
 }
 
-/// The tools a place offers, as the JSON its `tools/list` answers.
+/// The tools a place offers, as the JSON its `tools/list` answers: the
+/// hosted service's own come after the editor's.
 #[must_use]
 pub fn tools(transport: Transport) -> Vec<Value> {
     crate::tools()
         .into_iter()
+        .chain(crate::hosted::tools())
         .filter(|t| transport.offers(&t.name))
         .filter_map(|t| serde_json::to_value(t).ok())
         .map(|mut tool| {
@@ -100,6 +107,15 @@ pub fn tools(transport: Transport) -> Vec<Value> {
         .collect()
 }
 
+/// The first argument a call to one of [`HOSTED_ONLY`] was given that the
+/// tool's schema does not declare, as the sentence an agent needs to fix
+/// its call — the check every other tool gets inside [`crate::call`].
+/// `None` when the call fits, or the tool is not hosted.
+#[must_use]
+pub fn unknown_hosted_argument(tool: &str, args: &Value) -> Option<String> {
+    crate::hosted::unknown_argument(tool, args)
+}
+
 /// The tools by what they are for: how the instructions name them, so a
 /// client that defers the definitions still shows the model every one.
 const CATEGORIES: &[(&str, &[&str])] = &[
@@ -116,8 +132,10 @@ const CATEGORIES: &[(&str, &[&str])] = &[
             "levels",
             "edit_levels",
             "sessions",
+            "projects",
         ],
     ),
+    ("products", &["import_product", "products", "edit_products"]),
     (
         "drawing",
         &[
@@ -203,15 +221,11 @@ pub fn instructions(transport: Transport) -> String {
     let map: Vec<String> = CATEGORIES
         .iter()
         .filter_map(|(what, names)| {
-            let mut offered: Vec<&str> = names
+            let offered: Vec<&str> = names
                 .iter()
                 .copied()
                 .filter(|n| transport.offers(n))
                 .collect();
-            // The hosted service adds the account's project list.
-            if transport == Transport::Cloud && *what == "project" {
-                offered.push(HOSTED_ONLY[0]);
-            }
             (!offered.is_empty()).then(|| format!("{what}: {}", offered.join(", ")))
         })
         .collect();
@@ -246,7 +260,7 @@ not get worse) — then carry on.",
 
 #[cfg(test)]
 mod tests {
-    use super::{CATEGORIES, DESKTOP_ONLY, Transport, instructions, tools};
+    use super::{CATEGORIES, DESKTOP_ONLY, HOSTED_ONLY, Transport, instructions, tools};
 
     const ALL: [Transport; 3] = [Transport::Native, Transport::Browser, Transport::Cloud];
 
@@ -255,7 +269,11 @@ mod tests {
     /// one a client deferring definitions never shows the model.
     #[test]
     fn every_offered_tool_is_in_one_category() {
-        let every: Vec<String> = crate::tools().iter().map(|t| t.name.to_string()).collect();
+        let every: Vec<String> = crate::tools()
+            .iter()
+            .chain(&crate::hosted::tools())
+            .map(|t| t.name.to_string())
+            .collect();
         let mut mapped: Vec<&str> = CATEGORIES
             .iter()
             .flat_map(|(_, n)| n.iter().copied())
@@ -307,6 +325,29 @@ mod tests {
             }
         }
         assert_eq!(tools(Transport::Native).len(), crate::tools().len());
+        // The hosted service's own tools are its alone.
+        for transport in [Transport::Native, Transport::Browser] {
+            let said = instructions(transport);
+            for name in HOSTED_ONLY {
+                assert!(!transport.offers(name), "{transport:?} offers {name}");
+                assert!(
+                    !said.contains(&format!(" {name},")) && !said.contains(&format!(" {name};")),
+                    "{transport:?} names {name}"
+                );
+            }
+        }
+        let hosted: Vec<String> = crate::hosted::tools()
+            .iter()
+            .map(|t| t.name.to_string())
+            .collect();
+        assert_eq!(hosted, HOSTED_ONLY, "HOSTED_ONLY names the hosted tools");
+        let listed = tools(Transport::Cloud);
+        for name in HOSTED_ONLY {
+            assert!(
+                listed.iter().any(|t| t["name"] == name),
+                "Cloud leaves out {name}"
+            );
+        }
     }
 
     /// The places differ only where they say so: every other tool goes out
@@ -318,7 +359,11 @@ mod tests {
             let mut rewritten = Vec::new();
             for tool in tools(transport) {
                 let name = tool["name"].as_str().unwrap();
-                let original = native.iter().find(|t| t["name"] == name).unwrap();
+                // The hosted service's own tools have no desktop original.
+                let Some(original) = native.iter().find(|t| t["name"] == name) else {
+                    assert!(HOSTED_ONLY.contains(&name), "{name}");
+                    continue;
+                };
                 if &tool != original {
                     rewritten.push(name.to_owned());
                 }

@@ -1,5 +1,5 @@
 {
-  "total": 122814,
+  "total": 127647,
   "tools": {
     "accept": {
       "total": 1360,
@@ -139,6 +139,12 @@
       "input": 810,
       "output": 592
     },
+    "edit_products": {
+      "total": 1503,
+      "description": 387,
+      "input": 510,
+      "output": 391
+    },
     "edit_variants": {
       "total": 1020,
       "description": 235,
@@ -211,6 +217,12 @@
       "input": 1218,
       "output": 481
     },
+    "import_product": {
+      "total": 1556,
+      "description": 490,
+      "input": 388,
+      "output": 459
+    },
     "joinery": {
       "total": 3078,
       "description": 1176,
@@ -282,6 +294,18 @@
       "description": 702,
       "input": 163,
       "output": 274
+    },
+    "products": {
+      "total": 1137,
+      "description": 309,
+      "input": 224,
+      "output": 421
+    },
+    "projects": {
+      "total": 633,
+      "description": 174,
+      "input": 62,
+      "output": 214
     },
     "render_3d": {
       "total": 2817,

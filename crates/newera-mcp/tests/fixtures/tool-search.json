@@ -108,7 +108,21 @@
     ["what does nbr 5410 require outlets per room", "rules"],
     ["rules for floor drains and traps", "rules"],
     ["what each layout problem means", "rules"],
-    ["how the ergonomics score is weighed", "rules"]
+    ["how the ergonomics score is weighed", "rules"],
+    ["list my projects in the account", "projects"],
+    ["import a product from a shop link", "import_product"],
+    ["add an ikea cabinet from its url", "import_product"],
+    ["get the price and pack size of a tile from praxis", "import_product"],
+    ["which shop products have I imported", "products"],
+    ["product library with prices", "products"],
+    ["fill in a missing product price", "edit_products"],
+    ["refresh the price of a product", "edit_products"],
+    ["delete an imported product", "edit_products"],
+    ["import a praxis tile with its m2 per pack", "import_product"],
+    ["show the price history of a product", "products"]
+  ],
+  "not_on_cloud": [
+    ["import sweet home 3d sh3d", "the hosted service's file `open` takes the account's projects by name and reads no file from a disk"]
   ],
   "alike": [
     ["library", "edit_library", "a read and the write that changes it: separate tools so a client runs the read without asking"],
@@ -121,6 +135,9 @@
     ["video", "edit_video", "a read and the write that changes it: separate tools so a client runs the read without asking"],
     ["plugins", "run_plugin", "a read and the write that changes it: separate tools so a client runs the read without asking"],
     ["cut_list", "export", "a read and the write that changes it: separate tools so a client runs the read without asking"],
-    ["edit_cameras", "render_3d", "both speak of a camera (yaw, pitch): one stores a view, the other draws one"]
+    ["edit_cameras", "render_3d", "both speak of a camera (yaw, pitch): one stores a view, the other draws one"],
+    ["products", "edit_products", "a read and the write that changes it: separate tools so a client runs the read without asking"],
+    ["import_product", "products", "the write that adds to the library and the read of it: separate tools so a client runs the read without asking"],
+    ["import_product", "edit_products", "both write the library: one adds a product from a shop's link, the other changes one already kept by its id"]
   ]
 }

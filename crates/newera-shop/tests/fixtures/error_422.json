@@ -1,0 +1,25 @@
+{
+ "recorded": "2026-10-21",
+ "request": {
+  "method": "POST",
+  "path": "/api/webparser/parse",
+  "body": {}
+ },
+ "status": 422,
+ "headers": {
+  "x-credits-charged": "0"
+ },
+ "body": {
+  "detail": [
+   {
+    "type": "missing",
+    "loc": [
+     "body",
+     "url"
+    ],
+    "msg": "Field required",
+    "input": {}
+   }
+  ]
+ }
+}

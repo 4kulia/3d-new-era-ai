@@ -50,7 +50,8 @@ That is what makes these properties hold everywhere, for free:
 | `newera-app` | core, eframe | Desktop editor (also built for the browser). Never talks to the network: what it knows about the AI side it reads from the document, beside the collaborators (`src/ai.rs`). |
 | `newera-web`, `newera-editor-web` | core / app | WebAssembly viewer and the full editor in the browser. |
 | `newera-relay` | axum | Lets an AI reach the editor in a browser tab: a room is two secrets, tool calls go down the tab's socket and answers come back. No database, no disk, no project data — it passes messages and forgets. |
-| `newera-cloud` | mcp, relay, sh3d, axum, sqlx | The hosted service: accounts and OAuth 2.1, cloud projects in Postgres, a headless engine and render queue, and billing. Mounts `newera-relay` as a library. See [DISTRIBUTION.md](DISTRIBUTION.md). |
+| `newera-cloud` | mcp, relay, shop, sh3d, axum, sqlx | The hosted service: accounts and OAuth 2.1, cloud projects in Postgres, a headless engine and render queue, the account's library of shop products, and billing. Mounts `newera-relay` as a library. See [DISTRIBUTION.md](DISTRIBUTION.md). |
+| `newera-shop` | reqwest | Shop products for the hosted service: a product link becomes its identity (shop, market, article), its data comes from AnySite (the IKEA adapter, or the page parsed and, when that is not enough, rendered), and fixed rules read it into fields that each say where they came from. No database and no language model. |
 | `newera-telemetry` | tracing | Crash reports and usage notes sent to Sentry, off with one switch. A build without a DSN reports through the site's endpoint. |
 | `newera` | all | CLI entry point and process wiring. |
 

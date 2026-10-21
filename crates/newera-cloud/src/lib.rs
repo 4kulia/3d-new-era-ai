@@ -28,6 +28,7 @@ pub mod mail;
 pub mod mcp;
 pub mod oauth;
 pub mod pages;
+pub mod products;
 pub mod secret;
 
 use std::sync::Arc;
@@ -47,6 +48,8 @@ pub struct AppState {
     pub http: reqwest::Client,
     pub limits: limits::Limiter,
     pub engine: Arc<engine::Engine>,
+    /// Product fetches running apart from the requests that asked for them.
+    pub flights: products::Flights,
 }
 
 impl AppState {
@@ -88,6 +91,7 @@ impl AppState {
             http,
             limits: limits::Limiter::default(),
             engine,
+            flights: products::Flights::default(),
         }
     }
 }

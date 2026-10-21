@@ -1,0 +1,28 @@
+{
+ "recorded": "2026-10-21",
+ "request": {
+  "method": "POST",
+  "path": "/api/webparser/parse",
+  "body": {
+   "url": "https://www.hornbach.nl/p/wandtegel-elegance-wit-mat-30-x-60-cm-gerectificeerd/10656129/",
+   "return_full_html": true
+  }
+ },
+ "status": 200,
+ "headers": {
+  "x-credits-charged": "1"
+ },
+ "body": [
+  {
+   "@type": "@web_parser_result",
+   "cleaned_html": "<!DOCTYPE html>\n<html lang=\"en\">\n\n<body>\n\n<div aria-live=\"polite\" id=\"loading-error\" role=\"alert\">\n      A required part of this site couldn’t load. This may be due to a browser\n      extension, network issues, or browser settings. Please check your\n      connection, disable any ad blockers, or try using a different browser.\n    </div>\n\n</body>\n</html>\n",
+   "url": "https://www.hornbach.nl/p/wandtegel-elegance-wit-mat-30-x-60-cm-gerectificeerd/10656129/",
+   "title": "Client Challenge",
+   "meta_description": null,
+   "metadata": {},
+   "links": null,
+   "emails": null,
+   "phones": null
+  }
+ ]
+}

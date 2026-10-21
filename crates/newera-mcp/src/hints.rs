@@ -100,6 +100,9 @@ const HINTS: &[(&str, &str, Effect, bool)] = &[
     ("show_plan", "Show the plan", Effect::Read, false),
     ("render_3d", "Render a 3D view", Effect::Read, false),
     ("render_photo", "Render a photo", Effect::Read, false),
+    // The hosted service's own reads, from its database.
+    ("projects", "List your projects", Effect::Read, false),
+    ("products", "List shop products", Effect::Read, false),
     // Writes that only add.
     ("create", "Draw walls, rooms and more", Effect::Add, false),
     (
@@ -192,6 +195,14 @@ const HINTS: &[(&str, &str, Effect, bool)] = &[
     ("export", "Export to a file", Effect::Change, false),
     // Beyond the project.
     ("run_plugin", "Run a plugin", Effect::Change, true),
+    // A shop's page, fetched through AnySite into the account's library.
+    ("import_product", "Import a shop product", Effect::Add, true),
+    (
+        "edit_products",
+        "Change shop products",
+        Effect::Change,
+        true,
+    ),
     ("feedback", "Report to the developers", Effect::Add, true),
 ];
 
@@ -220,7 +231,7 @@ mod tests {
     /// reach the directories unlabelled, and be refused there.
     #[test]
     fn every_tool_has_hints() {
-        for tool in crate::tools() {
+        for tool in crate::tools().into_iter().chain(crate::hosted::tools()) {
             let hints = tool
                 .annotations
                 .as_ref()
@@ -238,7 +249,11 @@ mod tests {
     /// renamed tool would label nothing, and hide that the new name has none.
     #[test]
     fn every_row_names_a_tool() {
-        let names: Vec<String> = crate::tools().iter().map(|t| t.name.to_string()).collect();
+        let names: Vec<String> = crate::tools()
+            .iter()
+            .chain(&crate::hosted::tools())
+            .map(|t| t.name.to_string())
+            .collect();
         for (name, ..) in HINTS {
             assert!(names.iter().any(|n| n == name), "no tool named {name}");
         }

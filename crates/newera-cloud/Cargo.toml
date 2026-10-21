@@ -19,6 +19,7 @@ newera-core.workspace = true
 newera-mcp.workspace = true
 newera-sh3d.workspace = true
 newera-relay = { path = "../newera-relay" }
+newera-shop = { path = "../newera-shop" }
 reqwest = { version = "0.13", default-features = false, features = ["json", "form", "rustls"] }
 serde.workspace = true
 serde_json.workspace = true

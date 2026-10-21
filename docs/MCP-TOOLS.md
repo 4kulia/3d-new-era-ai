@@ -98,6 +98,14 @@ neither listed nor accepted in a tab or the hosted service. A new tool is offere
 unless it goes on that list, and needs a category in the instructions' map
 (`every_offered_tool_is_in_one_category`).
 
+The hosted service also answers tools of its own from its database — the account's
+projects and its library of shop products (`HOSTED_ONLY`). They are defined in
+[`src/hosted.rs`](../crates/newera-mcp/src/hosted.rs) and pass the same rules as every
+other tool (hints, output schema, budget, search, names), but only the hosted service
+offers them and runs them: [`crate::call`](../crates/newera-mcp/src/lib.rs) never does, and
+the service checks their arguments with `surface::unknown_hosted_argument` before it runs
+them.
+
 ## Budget
 
 [`tool-budget.json`](../crates/newera-mcp/tests/fixtures/tool-budget.json) records what
@@ -117,8 +125,12 @@ not grow: those tools have to shrink, not be written down. A new tool fits the c
 
 `a_tool_search_finds_the_right_tool` indexes the surface the way a client's tool search
 does (BM25 over names, descriptions and arguments) and runs the queries in
-`tool-search.json`. The share whose tool ranks in the first three and first five has a
-floor that only goes up. Run it with `--nocapture` to see the misses.
+`tool-search.json`. On the desktop's tools, the share whose tool ranks in the first three
+and first five has a floor that only goes up; the editor's tools hold the same floor among
+the tools the hosted service lists, where its own tools compete with them. A hosted
+service's own tool is searched among the tools the hosted service lists, and each of its
+queries finds it in the first three.
+Run it with `--nocapture` to see the misses.
 
 `no_two_tools_read_alike_without_a_reason` compares every pair of descriptions. A pair
 that reads alike is listed in `alike` with the reason it has to be two tools; the usual
