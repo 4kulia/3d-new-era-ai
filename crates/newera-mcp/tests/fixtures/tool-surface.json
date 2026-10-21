@@ -1849,6 +1849,105 @@
     },
     "title": "Change the electrical project"
   },
+  "edit_estimate": {
+    "annotations": {
+      "destructiveHint": true,
+      "openWorldHint": false,
+      "readOnlyHint": false,
+      "title": "Change the estimate"
+    },
+    "description": "Change the project's estimate. add_line {title, unit_price, quantity?, unit?, currency?, vat_included?, shop?, note?}: a line of your own (labour, delivery, glue, primer); remove_line {line}; save {name?}: keep the estimate as it is now, never changed after; remove_saved {saved}: delete a saved one. Reply: the line, or the saved estimate with its totals. estimate reads it.",
+    "inputSchema": {
+      "properties": {
+        "action": {
+          "description": "`add_line` adds a line of your own; `remove_line` takes one off; `save` keeps the estimate as it is now; `remove_saved` deletes a saved one",
+          "enum": [
+            "add_line",
+            "remove_line",
+            "save",
+            "remove_saved"
+          ],
+          "type": "string"
+        },
+        "currency": {
+          "description": "For `add_line`: default EUR",
+          "type": "string"
+        },
+        "line": {
+          "description": "For `remove_line`: the line's id, as estimate lists it",
+          "type": "string"
+        },
+        "name": {
+          "description": "For `save`: the name it is kept under; default the date and time",
+          "type": "string"
+        },
+        "note": {
+          "description": "For `add_line`: a remark kept with the line",
+          "type": "string"
+        },
+        "quantity": {
+          "description": "For `add_line`: how many; default 1",
+          "type": "number"
+        },
+        "saved": {
+          "description": "For `remove_saved`: the saved estimate's name or id",
+          "type": "string"
+        },
+        "shop": {
+          "description": "For `add_line`: who it is bought from or paid to",
+          "type": "string"
+        },
+        "title": {
+          "description": "For `add_line`: what it is, e.g. `Tiling labour`, `Delivery`, `Tile adhesive 25 kg`",
+          "type": "string"
+        },
+        "unit": {
+          "description": "For `add_line`: what the quantity counts, e.g. `hour`; default `item`",
+          "type": "string"
+        },
+        "unit_price": {
+          "description": "For `add_line`: the price of one, as text, e.g. `\"45.00\"`",
+          "type": "string"
+        },
+        "vat_included": {
+          "description": "For `add_line`: whether the price includes VAT; unsaid, its totals are apart from both",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "action"
+      ],
+      "type": "object"
+    },
+    "name": "edit_estimate",
+    "outputSchema": {
+      "properties": {
+        "by_currency": {
+          "type": "array"
+        },
+        "complete": {
+          "type": "boolean"
+        },
+        "id": {
+          "type": "string"
+        },
+        "line": {
+          "type": "object"
+        },
+        "note": {
+          "type": "string"
+        },
+        "removed": {
+          "type": "boolean"
+        },
+        "saved": {
+          "type": "object"
+        }
+      },
+      "type": "object"
+    },
+    "title": "Change the estimate"
+  },
   "edit_finishes": {
     "annotations": {
       "destructiveHint": true,
@@ -2687,14 +2786,15 @@
       "readOnlyHint": false,
       "title": "Change shop products"
     },
-    "description": "Change a product in the library. set {fields}: fill in or correct fields (price, pack_m2, width_cm…), kept as the agent's; refresh: read the shop again for today's price, VAT and price per unit, which replace the old ones and are added to the price history (title, size and pack stay as they are); remove: delete it. Reply: the product as products shows it. products reads the library.",
+    "description": "Change a product in the library. set {fields}: fill in or correct fields (price, pack_m2, width_cm…), kept as the agent's; refresh: read the shop again for today's price, VAT and price per unit, which replace the old ones and are added to the price history (title, size and pack stay as they are); attach_model {url, generator?}: keep the .glb at url as its 3D file, which place draws and which replaces its placeholder where it is open; remove: delete it. Reply: the product as products shows it. products reads the library.",
     "inputSchema": {
       "properties": {
         "action": {
-          "description": "`set` fills in or corrects fields; `refresh` reads the shop again for today's price; `remove` deletes the product",
+          "description": "`set` fills in or corrects fields; `refresh` reads the shop again for today's price; `attach_model` gives it a 3D model; `remove` deletes the product",
           "enum": [
             "set",
             "refresh",
+            "attach_model",
             "remove"
           ],
           "type": "string"
@@ -2704,8 +2804,16 @@
           "description": "For `set`: field → value, e.g. `{\"price\": \"24.54\", \"pack_m2\": 1.62, \"width_cm\": 80}`",
           "type": "object"
         },
+        "generator": {
+          "description": "For `attach_model`: what made it from the photo, e.g. `TRELLIS`; none: the shop's own file",
+          "type": "string"
+        },
         "id": {
           "description": "The product, as `import_product` or `products` gave it",
+          "type": "string"
+        },
+        "url": {
+          "description": "For `attach_model`: the .glb file's link",
           "type": "string"
         }
       },
@@ -2718,11 +2826,17 @@
     "name": "edit_products",
     "outputSchema": {
       "properties": {
+        "drawn": {
+          "type": "string"
+        },
         "fetched_at": {
           "type": "integer"
         },
         "fields": {
           "type": "object"
+        },
+        "files": {
+          "type": "array"
         },
         "id": {
           "type": "string"
@@ -3298,6 +3412,85 @@
     },
     "title": "Review ergonomics"
   },
+  "estimate": {
+    "annotations": {
+      "openWorldHint": false,
+      "readOnlyHint": true,
+      "title": "Price the project"
+    },
+    "description": "What the project costs: every shop product it uses — finishes by their m² with waste and coats, in whole packs, cans or rolls; furniture by the piece or pack — priced from the library, with the lines added by hand. Reply: groups {name, lines, totals}; lines {kind, shop, title, url, quantity, unit, unit_price, currency, vat_included, total, rooms, surfaces, notes}; totals per shop, currency and VAT (included, excluded, unknown), complete false while a line is unpriced; note when an open editor's project is not the one priced; saved lists the saved ones. takeoff measures; edit_estimate adds lines and saves.",
+    "inputSchema": {
+      "properties": {
+        "format": {
+          "description": "`csv`: a download link to the sheet, good for a day, instead of the lines",
+          "enum": [
+            "csv"
+          ],
+          "type": "string"
+        },
+        "group_by": {
+          "description": "How the lines are grouped; default shop. A product bought for several rooms stays one line, under `several rooms`",
+          "enum": [
+            "shop",
+            "room",
+            "kind"
+          ],
+          "type": "string"
+        },
+        "saved": {
+          "description": "A saved estimate, by its name or id: the lines and totals as they were saved",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "name": "estimate",
+    "outputSchema": {
+      "properties": {
+        "by_currency": {
+          "type": "array"
+        },
+        "complete": {
+          "type": "boolean"
+        },
+        "csv": {
+          "type": "string"
+        },
+        "from": {
+          "type": "string"
+        },
+        "gone": {
+          "type": "array"
+        },
+        "group_by": {
+          "type": "string"
+        },
+        "groups": {
+          "type": "array"
+        },
+        "note": {
+          "type": "string"
+        },
+        "project": {
+          "type": "object"
+        },
+        "saved": {
+          "type": "array"
+        },
+        "saved_as": {
+          "type": "object"
+        },
+        "totals": {
+          "type": "array"
+        }
+      },
+      "required": [
+        "complete"
+      ],
+      "type": "object"
+    },
+    "title": "Price the project"
+  },
   "export": {
     "annotations": {
       "destructiveHint": true,
@@ -3823,6 +4016,9 @@
         },
         "fields": {
           "type": "object"
+        },
+        "files": {
+          "type": "array"
         },
         "id": {
           "type": "string"
@@ -4353,7 +4549,7 @@
       "readOnlyHint": true,
       "title": "Inspect an imported model"
     },
-    "description": "Inspect an imported 3D model, a piece's (id) or a file before placing it: the unit taken (guessed from its size unless unit= or the piece says), natural size, triangles and where they go, materials with their images, named parts (OBJ objects and groups, glTF nodes: arms, seat, frame) with bounds and materials, and warnings for what is not drawn as the file says (a texture or material library not found, normal and roughness maps, extensions). For a piece that looks wrong after place model=…, instead of reading the file. part=<words> keeps the parts named so; check=clashes finds parts passing through one another (a cushion through a rail), not those that touch. Reply {file, format, unit, raw, size cm, tris, materials [[name, color, image, tris]], parts [[name, tris, min, max, materials, \"hidden\" when hidden]] in cm of the piece (x across, y to the front, z up), cost {tris, heaviest [[part, tris, %]], copies, in_project}, warnings}; with id also piece {size, scale, far}; check adds clashes [[part, part, pairs, at, depth cm]], degenerate and checked (what was looked at). place model=… imports one.",
+    "description": "Inspect an imported 3D model, a piece's (id) or a file before placing it: the unit taken (guessed from its size unless unit= or the piece says), natural size, triangles and where they go, materials with their images, named parts (OBJ objects and groups, glTF nodes: arms, seat, frame) with bounds and materials, and warnings for what is not drawn as the file says (a texture or material library not found, normal and roughness maps, extensions). For a piece that looks wrong after place model=…, instead of reading the file. part=<words> keeps the parts named so; check=clashes finds parts passing through one another (a cushion through a rail), not those that touch. Reply {file, format, unit, raw, size cm, tris, materials [[name, color, image, tris]], parts [[name, tris, min, max, materials, \"hidden\" when hidden]] in cm of the piece (x across, y to the front, z up), cost {tris, heaviest [[part, tris, %]], copies, in_project}, warnings}; with id also piece {size, scale, far} and the product page's measures against the drawn ones; check adds clashes [[part, part, pairs, at, depth cm]], degenerate and checked (what was looked at). place model=… imports one.",
     "inputSchema": {
       "additionalProperties": false,
       "properties": {
@@ -4633,7 +4829,7 @@
       "readOnlyHint": false,
       "title": "Place furniture, doors and windows"
     },
-    "description": "Place catalog items, or copy=<id> of a piece already in the project (model, finish and parts; `catalog` scope=project lists them). at=[x,y] is the center (doors and windows near a wall snap into it; into=[x,y] picks the swing side); wall=<id> (+along cm) puts doors and windows in a wall, or furniture with its back to it. facing=+x|-x|+y|-y|[x,y]|<id> turns the front toward a side, point or element, preferred to angle (clockwise degrees, y down: 0 front to +y, 90 to -x, 180 to -y, 270 to +x); a piece whose back belongs on a wall, put within 30 cm of one with neither, turns its back to it. The reply says where fronts ended: faces=f3:+y(seat), turned=f3:back to w2. Ceiling pieces hang from the ceiling the 3D draws and follow it: a pendant takes elev (shade bottom, ~150-160 over a table) or h (drop). w/d/h, pitch/roll, mat, opacity; defaults {…} fills every item; px=true reads background pixels. cat=beam with a,b=[x,y,z] makes rafters and posts. dry=true answers what it would add, the clearances and the findings, without writing.",
+    "description": "Place catalog items, or copy=<id> of a piece already in the project (model, finish and parts; `catalog` scope=project lists them), or import a model=<.obj/.gltf/.glb> file (unit=m|cm|mm|in), or model=product:<id>, a shop product of the hosted service. at=[x,y] is the center (doors and windows near a wall snap into it; into=[x,y] picks the swing side); wall=<id> (+along cm) puts doors and windows in a wall, or furniture with its back to it. facing=+x|-x|+y|-y|[x,y]|<id> turns the front toward a side, point or element, preferred to angle (clockwise degrees, y down: 0 front to +y, 90 to -x, 180 to -y, 270 to +x); a piece whose back belongs on a wall, put within 30 cm of one with neither, turns its back to it. The reply says where fronts ended: faces=f3:+y(seat), turned=f3:back to w2. Ceiling pieces hang from the ceiling the 3D draws and follow it: a pendant takes elev (shade bottom, ~150-160 over a table) or h (drop). w/d/h, pitch/roll, mat, opacity; defaults {…} fills every item; px=true reads background pixels. cat=beam with a,b=[x,y,z] makes rafters and posts. dry=true answers what it would add, the clearances and the findings, without writing.",
     "inputSchema": {
       "$defs": {
         "Dry": {
@@ -4807,7 +5003,7 @@
               "type": "boolean"
             },
             "model": {
-              "description": "Instead of `cat`: path of an .obj/.gltf/.glb model to import",
+              "description": "Instead of `cat`: path of an .obj/.gltf/.glb model to import, or `product:<id>` on the hosted service",
               "type": "string"
             },
             "name": {
@@ -4821,6 +5017,10 @@
             "pitch": {
               "description": "Tilt around the width axis, degrees (rafters, ramps, panels)",
               "type": "number"
+            },
+            "product": {
+              "description": "The hosted service's shop product id the piece is; `model=product:<id>` sets it",
+              "type": "string"
             },
             "roll": {
               "description": "Tilt around the depth axis, degrees",
@@ -5099,6 +5299,9 @@
         },
         "fields": {
           "type": "object"
+        },
+        "files": {
+          "type": "array"
         },
         "id": {
           "type": "string"

@@ -698,6 +698,42 @@ fn hold(
                         ctx.request_repaint();
                     });
                 }
+                // A shop product's file, before the call that places it:
+                // kept where the project's files are, so the call finds it
+                // and the next save takes it to the service.
+                Some("asset") => {
+                    let id = message
+                        .get("id")
+                        .cloned()
+                        .unwrap_or(serde_json::Value::Null);
+                    let kept = {
+                        let doc = document.read();
+                        crate::staged_asset::keep(&message, doc.asset_dir(), |path| {
+                            doc.variants()
+                                .any(|v| v.home().asset_paths().iter().any(|p| p == path))
+                        })
+                    };
+                    let reply = match kept {
+                        Ok(result) => {
+                            // A model replaced under pieces drawn with it:
+                            // they redraw, and the service gets the file
+                            // with the next save.
+                            if message["replace"] == true && result["kept"] == true {
+                                if let Some(cloud) = state.borrow_mut().cloud.as_mut() {
+                                    cloud.saver.files_changed();
+                                }
+                                ctx.request_repaint();
+                            }
+                            serde_json::json!({
+                                "type": "result", "id": id, "ok": true, "result": result
+                            })
+                        }
+                        Err(why) => serde_json::json!({
+                            "type": "result", "id": id, "ok": false, "error": why
+                        }),
+                    };
+                    let _ = socket.send_with_str(&reply.to_string());
+                }
                 // The service renders next, from what is stored: what this
                 // tab has not saved yet goes now.
                 Some("flush") => {

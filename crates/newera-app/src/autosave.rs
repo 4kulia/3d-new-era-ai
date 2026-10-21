@@ -34,6 +34,13 @@ pub(crate) struct Autosave {
     /// The document revision last put down as a backup, so a retry after a
     /// failed reload does not download the same state again.
     backed_up: Option<u64>,
+    /// A file of the project was replaced (a product's model the service
+    /// sent) since the save the service holds: the document is to be sent
+    /// although its revision did not move.
+    files_changed: bool,
+    /// The save on its way carries such a file: a try that fails leaves it
+    /// to send again.
+    sending_files: bool,
 }
 
 impl Autosave {
@@ -48,7 +55,26 @@ impl Autosave {
             failed_at: None,
             reloading: false,
             backed_up: None,
+            files_changed: false,
+            sending_files: false,
         }
+    }
+
+    /// A file of the project was replaced with no change to the document:
+    /// it is saved as a change is.
+    pub(crate) fn files_changed(&mut self) {
+        self.files_changed = true;
+    }
+
+    /// Whether the service holds the document as it is at `revision`.
+    fn held(&self, revision: u64) -> bool {
+        revision == self.saved && !self.files_changed
+    }
+
+    /// The document at `revision` is on its way.
+    fn send(&mut self, revision: u64) {
+        self.sending = Some(revision);
+        self.sending_files = std::mem::take(&mut self.files_changed);
     }
 
     /// Whether the document, at `revision`, is to be sent now; if so, the
@@ -57,7 +83,7 @@ impl Autosave {
         if revision != self.seen.0 {
             self.seen = (revision, now);
         }
-        if self.reloading || self.sending.is_some() || revision == self.saved {
+        if self.reloading || self.sending.is_some() || self.held(revision) {
             return None;
         }
         if now - self.seen.1 < QUIET_MS {
@@ -66,7 +92,7 @@ impl Autosave {
         if self.failed_at.is_some_and(|at| now - at < RETRY_MS) {
             return None;
         }
-        self.sending = Some(revision);
+        self.send(revision);
         Some(self.server)
     }
 
@@ -80,10 +106,10 @@ impl Autosave {
         if self.sending.is_some() {
             return Flush::Wait;
         }
-        if revision == self.saved {
+        if self.held(revision) {
             return Flush::Kept(self.server);
         }
-        self.sending = Some(revision);
+        self.send(revision);
         Flush::Send(self.server)
     }
 
@@ -92,12 +118,14 @@ impl Autosave {
         if let Some(sent) = self.sending.take() {
             self.saved = sent;
         }
+        self.sending_files = false;
         self.server = server;
     }
 
     /// The save on its way did not go through; the next try waits.
     pub(crate) fn failed(&mut self, now: f64) {
         self.sending = None;
+        self.files_changed |= std::mem::take(&mut self.sending_files);
         self.failed_at = Some(now);
     }
 
@@ -105,6 +133,7 @@ impl Autosave {
     /// service's copy is fetched.
     pub(crate) fn conflicted(&mut self) {
         self.sending = None;
+        self.sending_files = false;
         self.reloading = true;
     }
 
@@ -164,6 +193,26 @@ fn project_id(url: &str) -> &str {
 #[cfg(test)]
 mod tests {
     use super::{Autosave, Flush, QUIET_MS, RETRY_MS, flush_answer};
+
+    /// A file of the project replaced with no change to the document — a
+    /// product's model the service sent — is saved like a change: after
+    /// the quiet, or at once on a flush; and again after a failed try.
+    #[test]
+    fn a_replaced_file_is_saved_like_a_change() {
+        let mut save = Autosave::new(7, 3, 0.0);
+        save.files_changed();
+        assert_eq!(save.due(3, 0.0), None, "the quiet first");
+        assert_eq!(save.due(3, QUIET_MS), Some(7));
+        save.failed(QUIET_MS);
+        assert_eq!(save.due(3, QUIET_MS + RETRY_MS), Some(7), "tried again");
+        save.saved(8);
+        assert_eq!(save.due(3, 10.0 * RETRY_MS), None, "kept");
+        assert_eq!(save.flush(3), Flush::Kept(8));
+        save.files_changed();
+        assert_eq!(save.flush(3), Flush::Send(8));
+        save.saved(9);
+        assert_eq!(save.flush(3), Flush::Kept(9));
+    }
 
     #[test]
     fn a_flush_answer_names_the_project_by_its_id() {
@@ -282,6 +331,8 @@ mod tests {
                 failed_at: None,
                 reloading: false,
                 backed_up: None,
+                files_changed: false,
+                sending_files: false,
             }
         );
     }

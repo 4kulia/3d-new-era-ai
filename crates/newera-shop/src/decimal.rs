@@ -98,6 +98,16 @@ impl Decimal {
     pub fn is_positive(self) -> bool {
         self.units > 0
     }
+
+    /// `units / 10^scale`.
+    pub fn new(units: i64, scale: u32) -> Self {
+        Self { units, scale }
+    }
+
+    /// Its digits and how many of them are decimals: `units / 10^scale`.
+    pub fn parts(self) -> (i64, u32) {
+        (self.units, self.scale)
+    }
 }
 
 fn split(text: &str, mark: char) -> (String, String) {

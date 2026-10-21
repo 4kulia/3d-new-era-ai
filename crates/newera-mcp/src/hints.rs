@@ -105,6 +105,7 @@ const HINTS: &[(&str, &str, Effect, bool)] = &[
     // The hosted service's own reads, from its database.
     ("projects", "List your projects", Effect::Read, false),
     ("products", "List shop products", Effect::Read, false),
+    ("estimate", "Price the project", Effect::Read, false),
     // Writes that only add.
     ("create", "Draw walls, rooms and more", Effect::Add, false),
     (
@@ -210,6 +211,13 @@ const HINTS: &[(&str, &str, Effect, bool)] = &[
         "Change shop products",
         Effect::Change,
         true,
+    ),
+    // The estimate's own lines and saved copies, in the database.
+    (
+        "edit_estimate",
+        "Change the estimate",
+        Effect::Change,
+        false,
     ),
     ("feedback", "Report to the developers", Effect::Add, true),
 ];

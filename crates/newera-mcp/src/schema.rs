@@ -65,7 +65,16 @@ fn compact_object(map: &mut Map<String, Value>) {
             map.remove("description");
         }
     }
-    map.values_mut().for_each(compact);
+    for (key, value) in map.iter_mut() {
+        // Under these the keys are names — of arguments, of definitions —
+        // not keywords: each value is a schema, the map itself is not.
+        match (key.as_str(), value) {
+            ("properties" | "$defs" | "definitions", Value::Object(named)) => {
+                named.values_mut().for_each(compact);
+            }
+            (_, value) => compact(value),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -88,6 +97,32 @@ mod tests {
                     "t": {"description": "Thickness cm", "type": "number"},
                     "a": {"$ref": "#/$defs/Point2", "description": "Start"}
                 }
+            })
+        );
+    }
+
+    /// An argument named like a keyword (`format`, `title`, `default`) is
+    /// an argument: only a schema's own keywords go.
+    #[test]
+    fn an_argument_named_like_a_keyword_stays() {
+        let mut schema = serde_json::json!({
+            "properties": {
+                "format": {"type": ["string", "null"], "title": "F", "description": "csv."},
+                "title": {"type": "string", "format": "x"},
+                "default": {"type": "boolean"},
+            },
+            "$defs": {"title": {"type": "string", "title": "T"}},
+        });
+        compact(&mut schema);
+        assert_eq!(
+            schema,
+            serde_json::json!({
+                "properties": {
+                    "format": {"type": "string", "description": "csv"},
+                    "title": {"type": "string"},
+                    "default": {"type": "boolean"},
+                },
+                "$defs": {"title": {"type": "string"}},
             })
         );
     }

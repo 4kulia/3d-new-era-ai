@@ -12,9 +12,16 @@
 use serde_json::{Value, json};
 
 /// Tools the hosted service adds of its own and answers from its database:
-/// the account's projects and its library of shop products. Defined in
+/// the account's projects, its library of shop products and the estimate. Defined in
 /// `hosted.rs`; never run by [`crate::call`].
-pub const HOSTED_ONLY: [&str; 4] = ["projects", "import_product", "products", "edit_products"];
+pub const HOSTED_ONLY: [&str; 6] = [
+    "projects",
+    "import_product",
+    "products",
+    "edit_products",
+    "estimate",
+    "edit_estimate",
+];
 
 /// Where the tools are served.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -137,8 +144,14 @@ const CATEGORIES: &[(&str, &[&str])] = &[
     ),
     ("products", &["import_product", "products", "edit_products"]),
     (
-        "finishes and quantities",
-        &["finishes", "edit_finishes", "takeoff"],
+        "finishes, quantities and costs",
+        &[
+            "finishes",
+            "edit_finishes",
+            "takeoff",
+            "estimate",
+            "edit_estimate",
+        ],
     ),
     (
         "drawing",

@@ -65,6 +65,11 @@ fn m2(value: f64) -> Value {
     json!((value * 1000.0).round() / 1000.0)
 }
 
+/// A length to the millimetre.
+fn cm(value: f64) -> f64 {
+    (value * 10.0).round() / 10.0
+}
+
 #[tool_router(router = finishes_router, vis = "pub(crate)")]
 impl NewEraMcp {
     #[tool(
@@ -127,6 +132,12 @@ impl NewEraMcp {
                 .product
                 .clone()
                 .ok_or_else(|| invalid("assign: `product`, the hosted service's product id"))?;
+            if product.starts_with(crate::PRODUCT_REF) {
+                return Err(invalid(format!(
+                    "{product}: {}",
+                    crate::PRODUCTS_ARE_HOSTED
+                )));
+            }
             commands.push(Command::AssignFinish {
                 assignment: FinishAssignment {
                     surface: at,
@@ -244,6 +255,17 @@ impl NewEraMcp {
                         if let Some(waste) = s.waste {
                             row["waste"] = json!(waste);
                         }
+                        // Every wall side says its stretches, none included:
+                        // the estimate tells a wall with nothing to hang from
+                        // an editor that does not say.
+                        if matches!(s.surface, Surface::Wall(..)) {
+                            row["spans_cm"] = json!(
+                                s.spans
+                                    .iter()
+                                    .map(|(width, height)| [cm(*width), cm(*height)])
+                                    .collect::<Vec<_>>()
+                            );
+                        }
                         if !s.cut_by.is_empty() {
                             row["openings"] =
                                 json!(s.cut_by.iter().map(ToString::to_string).collect::<Vec<_>>());
@@ -264,11 +286,27 @@ impl NewEraMcp {
             .furniture
             .iter()
             .map(|count| {
-                json!({
+                let mut row = json!({
                     "product": count.product,
                     "pieces": count.pieces.len(),
                     "ids": count.pieces.iter().map(ToString::to_string).collect::<Vec<_>>(),
-                })
+                });
+                // The rooms the pieces stand in, as the room filter finds them.
+                let mut rooms: Vec<String> = count
+                    .pieces
+                    .iter()
+                    .filter_map(|id| {
+                        let piece = home.find_piece(*id)?;
+                        home.room_at(piece.position, home.piece_level(*id))
+                            .map(|r| r.id.to_string())
+                    })
+                    .collect();
+                rooms.sort();
+                rooms.dedup();
+                if !rooms.is_empty() {
+                    row["rooms"] = json!(rooms);
+                }
+                row
             })
             .collect();
         let mut out = json!({"finishes": finishes, "furniture": furniture});

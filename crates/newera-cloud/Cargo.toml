@@ -15,8 +15,10 @@ anyhow.workspace = true
 axum = { workspace = true, features = ["macros", "form", "query"] }
 base64.workspace = true
 getrandom = "0.4"
+newera-catalog.workspace = true
 newera-core.workspace = true
 newera-mcp.workspace = true
+newera-render.workspace = true
 newera-sh3d.workspace = true
 newera-relay = { path = "../newera-relay" }
 newera-shop = { path = "../newera-shop" }

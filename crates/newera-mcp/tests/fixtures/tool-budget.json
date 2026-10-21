@@ -1,5 +1,5 @@
 {
-  "total": 131006,
+  "total": 135716,
   "tools": {
     "accept": {
       "total": 1360,
@@ -97,6 +97,12 @@
       "input": 2721,
       "output": 785
     },
+    "edit_estimate": {
+      "total": 2209,
+      "description": 375,
+      "input": 1399,
+      "output": 221
+    },
     "edit_finishes": {
       "total": 1714,
       "description": 331,
@@ -146,10 +152,10 @@
       "output": 592
     },
     "edit_products": {
-      "total": 1503,
-      "description": 387,
-      "input": 510,
-      "output": 391
+      "total": 1963,
+      "description": 527,
+      "input": 779,
+      "output": 442
     },
     "edit_variants": {
       "total": 1020,
@@ -186,6 +192,12 @@
       "description": 1003,
       "input": 1362,
       "output": 345
+    },
+    "estimate": {
+      "total": 1648,
+      "description": 617,
+      "input": 472,
+      "output": 378
     },
     "export": {
       "total": 1662,
@@ -230,10 +242,10 @@
       "output": 481
     },
     "import_product": {
-      "total": 1556,
+      "total": 1581,
       "description": 490,
       "input": 388,
-      "output": 459
+      "output": 484
     },
     "joinery": {
       "total": 3078,
@@ -278,8 +290,8 @@
       "output": 302
     },
     "model": {
-      "total": 2730,
-      "description": 1114,
+      "total": 2785,
+      "description": 1169,
       "input": 754,
       "output": 666
     },
@@ -290,9 +302,9 @@
       "output": 793
     },
     "place": {
-      "total": 7769,
-      "description": 1043,
-      "input": 5593,
+      "total": 8055,
+      "description": 1164,
+      "input": 5758,
       "output": 896
     },
     "plugins": {
@@ -308,10 +320,10 @@
       "output": 274
     },
     "products": {
-      "total": 1137,
+      "total": 1162,
       "description": 309,
       "input": 224,
-      "output": 421
+      "output": 446
     },
     "projects": {
       "total": 633,

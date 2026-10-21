@@ -117,6 +117,7 @@ fn a_tile_band_and_paint_above_are_listed_and_measured() {
                     "surfaces": [{
                         "surface": "w1:right", "room": "r2", "band": [120.0, 250.0], "coats": 2,
                         "gross_m2": 5.2, "openings_m2": 0.9, "net_m2": 4.3, "openings": ["f3"],
+                        "spans_cm": [[400.0, 130.0]],
                     }],
                 },
                 {
@@ -124,10 +125,11 @@ fn a_tile_band_and_paint_above_are_listed_and_measured() {
                     "surfaces": [{
                         "surface": "w1:right", "room": "r2", "band": [0.0, 120.0], "waste": 10.0,
                         "gross_m2": 4.8, "openings_m2": 0.3, "net_m2": 4.5, "openings": ["f3"],
+                        "spans_cm": [[400.0, 120.0]],
                     }],
                 },
             ],
-            "furniture": [{"product": "p-sofa", "pieces": 1, "ids": ["f4"]}],
+            "furniture": [{"product": "p-sofa", "pieces": 1, "ids": ["f4"], "rooms": ["r2"]}],
         })
     );
     assert_eq!(
@@ -226,7 +228,7 @@ fn a_piece_kept_or_left_out_is_not_bought() {
     .unwrap();
     assert_eq!(
         read(&document, "takeoff", json!({}))["furniture"],
-        json!([{"product": "p-sofa", "pieces": 1, "ids": ["f4"]}])
+        json!([{"product": "p-sofa", "pieces": 1, "ids": ["f4"], "rooms": ["r2"]}])
     );
     said(
         &document,
@@ -358,6 +360,6 @@ fn a_floor_and_a_ceiling_take_their_look_and_a_storey_is_named() {
     );
     assert_eq!(
         taken["furniture"],
-        json!([{"product": "p-chair", "pieces": 1, "ids": ["f6"]}])
+        json!([{"product": "p-chair", "pieces": 1, "ids": ["f6"], "rooms": ["r2"]}])
     );
 }

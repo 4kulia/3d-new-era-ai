@@ -21,15 +21,18 @@ pub mod accounts;
 pub mod billing;
 pub mod config;
 pub mod engine;
+pub mod estimate;
 pub mod files;
 pub mod limits;
 pub mod login;
 pub mod mail;
 pub mod mcp;
+pub mod models;
 pub mod oauth;
 pub mod pages;
 pub mod products;
 pub mod secret;
+pub mod staging;
 
 use std::sync::Arc;
 
@@ -50,6 +53,8 @@ pub struct AppState {
     pub engine: Arc<engine::Engine>,
     /// Product fetches running apart from the requests that asked for them.
     pub flights: products::Flights,
+    /// Where a product model's link may lead: the public internet.
+    pub links: models::Links,
 }
 
 impl AppState {
@@ -92,6 +97,7 @@ impl AppState {
             limits: limits::Limiter::default(),
             engine,
             flights: products::Flights::default(),
+            links: models::Links::default(),
         }
     }
 }

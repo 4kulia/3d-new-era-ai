@@ -74,6 +74,17 @@ mod transports {
 #[cfg(not(target_arch = "wasm32"))]
 pub use transports::{http_service, serve_stdio};
 
+/// How a call names a shop product of the hosted service where a model file
+/// or a product id goes: `place model=product:<id>`, `edit_finishes
+/// product=product:<id>`. The hosted service puts the product's file in the
+/// project and rewrites the reference before the call runs; one that arrives
+/// here unrewritten — on the desktop, or in a tab on the standalone relay —
+/// is refused with [`PRODUCTS_ARE_HOSTED`].
+pub const PRODUCT_REF: &str = "product:";
+
+/// Why a `product:<id>` reference is refused where there is no product library.
+pub const PRODUCTS_ARE_HOSTED: &str = "products exist only on the hosted service";
+
 /// Every tool this server has, with the schema an AI client needs to call it.
 ///
 /// The desktop hands this out over the MCP handshake; a browser tab has no

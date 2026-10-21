@@ -1,5 +1,5 @@
 //! The tools the hosted service answers itself, from its own database: the
-//! account's projects and its library of shop products.
+//! account's projects, its library of shop products and the estimate.
 //!
 //! They are defined here, beside every other tool, so they go through the
 //! same rules — hints, output schema, budget, search, naming — and are
@@ -39,11 +39,60 @@ pub(crate) struct ProductsSchema {
 pub(crate) struct EditProductsSchema {
     /// The product, as `import_product` or `products` gave it
     id: String,
-    /// `set` fills in or corrects fields; `refresh` reads the shop again for today's price; `remove` deletes the product
-    #[schemars(extend("enum" = ["set", "refresh", "remove"]))]
+    /// `set` fills in or corrects fields; `refresh` reads the shop again for today's price; `attach_model` gives it a 3D model; `remove` deletes the product
+    #[schemars(extend("enum" = ["set", "refresh", "attach_model", "remove"]))]
     action: String,
     /// For `set`: field → value, e.g. `{"price": "24.54", "pack_m2": 1.62, "width_cm": 80}`
     fields: Option<serde_json::Map<String, serde_json::Value>>,
+    /// For `attach_model`: the .glb file's link
+    url: Option<String>,
+    /// For `attach_model`: what made it from the photo, e.g. `TRELLIS`; none: the shop's own file
+    generator: Option<String>,
+}
+
+/// What `estimate` takes.
+#[derive(JsonSchema)]
+#[allow(dead_code)] // a schema, never built
+pub(crate) struct EstimateSchema {
+    /// How the lines are grouped; default shop. A product bought for several rooms stays one line, under `several rooms`
+    #[schemars(extend("enum" = ["shop", "room", "kind"]))]
+    group_by: Option<String>,
+    /// A saved estimate, by its name or id: the lines and totals as they were saved
+    saved: Option<String>,
+    /// `csv`: a download link to the sheet, good for a day, instead of the lines
+    #[schemars(extend("enum" = ["csv"]))]
+    format: Option<String>,
+}
+
+/// What `edit_estimate` takes.
+#[derive(JsonSchema)]
+#[allow(dead_code)] // a schema, never built
+pub(crate) struct EditEstimateSchema {
+    /// `add_line` adds a line of your own; `remove_line` takes one off; `save` keeps the estimate as it is now; `remove_saved` deletes a saved one
+    #[schemars(extend("enum" = ["add_line", "remove_line", "save", "remove_saved"]))]
+    action: String,
+    /// For `add_line`: what it is, e.g. `Tiling labour`, `Delivery`, `Tile adhesive 25 kg`
+    title: Option<String>,
+    /// For `add_line`: how many; default 1
+    quantity: Option<f64>,
+    /// For `add_line`: what the quantity counts, e.g. `hour`; default `item`
+    unit: Option<String>,
+    /// For `add_line`: the price of one, as text, e.g. `"45.00"`
+    unit_price: Option<String>,
+    /// For `add_line`: default EUR
+    currency: Option<String>,
+    /// For `add_line`: whether the price includes VAT; unsaid, its totals are apart from both
+    vat_included: Option<bool>,
+    /// For `add_line`: who it is bought from or paid to
+    shop: Option<String>,
+    /// For `add_line`: a remark kept with the line
+    note: Option<String>,
+    /// For `remove_line`: the line's id, as estimate lists it
+    line: Option<String>,
+    /// For `save`: the name it is kept under; default the date and time
+    name: Option<String>,
+    /// For `remove_saved`: the saved estimate's name or id
+    saved: Option<String>,
 }
 
 const PROJECTS: &str = "The projects kept in the account: rows [name, id, kb, updated, active], the space used and the plan's limits. file action=open switches the active one; action=new starts one.";
@@ -52,7 +101,11 @@ const IMPORT_PRODUCT: &str = "Import a product from a shop's link into the accou
 
 const PRODUCTS: &str = "The account's library of shop products: rows [id, kind, shop, title, price, currency, sale_unit, missing], or with id one product in full — its fields and where each came from, what is missing, and its price history. import_product adds one; edit_products fills fields, fetches today's price or removes one.";
 
-const EDIT_PRODUCTS: &str = "Change a product in the library. set {fields}: fill in or correct fields (price, pack_m2, width_cm…), kept as the agent's; refresh: read the shop again for today's price, VAT and price per unit, which replace the old ones and are added to the price history (title, size and pack stay as they are); remove: delete it. Reply: the product as products shows it. products reads the library.";
+const EDIT_PRODUCTS: &str = "Change a product in the library. set {fields}: fill in or correct fields (price, pack_m2, width_cm…), kept as the agent's; refresh: read the shop again for today's price, VAT and price per unit, which replace the old ones and are added to the price history (title, size and pack stay as they are); attach_model {url, generator?}: keep the .glb at url as its 3D file, which place draws and which replaces its placeholder where it is open; remove: delete it. Reply: the product as products shows it. products reads the library.";
+
+const ESTIMATE: &str = "What the project costs: every shop product it uses — finishes by their m² with waste and coats, in whole packs, cans or rolls; furniture by the piece or pack — priced from the library, with the lines added by hand. Reply: groups {name, lines, totals}; lines {kind, shop, title, url, quantity, unit, unit_price, currency, vat_included, total, rooms, surfaces, notes}; totals per shop, currency and VAT (included, excluded, unknown), complete false while a line is unpriced; note when an open editor's project is not the one priced; saved lists the saved ones. takeoff measures; edit_estimate adds lines and saves.";
+
+const EDIT_ESTIMATE: &str = "Change the project's estimate. add_line {title, unit_price, quantity?, unit?, currency?, vat_included?, shop?, note?}: a line of your own (labour, delivery, glue, primer); remove_line {line}; save {name?}: keep the estimate as it is now, never changed after; remove_saved {saved}: delete a saved one. Reply: the line, or the saved estimate with its totals. estimate reads it.";
 
 /// The hosted service's own tools, laid out like every other.
 pub(crate) fn tools() -> Vec<Tool> {
@@ -68,6 +121,12 @@ pub(crate) fn tools() -> Vec<Tool> {
             "edit_products",
             EDIT_PRODUCTS,
             schema_for_type::<EditProductsSchema>(),
+        ),
+        ("estimate", ESTIMATE, schema_for_type::<EstimateSchema>()),
+        (
+            "edit_estimate",
+            EDIT_ESTIMATE,
+            schema_for_type::<EditEstimateSchema>(),
         ),
     ]
     .into_iter()
@@ -137,5 +196,20 @@ mod tests {
             Some("unknown argument `x`: it takes no arguments".to_owned())
         );
         assert_eq!(super::unknown_argument("home", &json!({"x": 1})), None);
+        assert_eq!(
+            super::unknown_argument("edit_estimate", &json!({"action": "save", "title": "x"})),
+            Some("`title` is for `add_line`, not `save`".to_owned())
+        );
+        assert_eq!(
+            super::unknown_argument(
+                "edit_estimate",
+                &json!({"action": "add_line", "title": "Labour", "unit_price": "45", "quantity": 8, "vat_included": false})
+            ),
+            None
+        );
+        assert_eq!(
+            super::unknown_argument("estimate", &json!({"group": "room"})),
+            Some("unknown argument `group`: it takes format, group_by, saved".to_owned())
+        );
     }
 }

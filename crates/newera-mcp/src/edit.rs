@@ -1957,7 +1957,7 @@ pub(crate) struct PlaceSpec {
     /// Catalog id, e.g. `bed-double` (see the `catalog` tool).
     #[serde(default)]
     pub cat: String,
-    /// Instead of `cat`: path of an .obj/.gltf/.glb model to import.
+    /// Instead of `cat`: path of an .obj/.gltf/.glb model to import, or `product:<id>` on the hosted service.
     pub model: Option<String>,
     /// With `model`: unit of its numbers, `m`, `cm`, `mm` or `in` (default: guessed from its size).
     pub unit: Option<String>,
@@ -2020,6 +2020,8 @@ pub(crate) struct PlaceSpec {
     pub b: Option<[f64; 3]>,
     /// Light it gives (fixtures come with theirs).
     pub light: Option<LightSpec>,
+    /// The hosted service's shop product id the piece is; `model=product:<id>` sets it.
+    pub product: Option<String>,
 }
 
 /// A piece's light, photometric.
@@ -2509,6 +2511,13 @@ pub(crate) fn place_noting(doc: &mut Document, items: Vec<PlaceSpec>) -> EditRes
     let count = items.len();
     let mut refused: Vec<String> = Vec::new();
     let mut one = |mut spec: PlaceSpec| -> EditResult<()> {
+        // The hosted service rewrites a product to its staged file before
+        // the call gets here; one left is a call with no product library.
+        if let Some(model) = spec.model.as_deref()
+            && model.starts_with(crate::PRODUCT_REF)
+        {
+            return Err(format!("{model}: {}", crate::PRODUCTS_ARE_HOSTED));
+        }
         // `library:<name>@<v>`: that version's file, at the size, in the
         // unit and with the photos and measurements it was published with.
         let library = match spec
@@ -2692,6 +2701,9 @@ pub(crate) fn place_noting(doc: &mut Document, items: Vec<PlaceSpec>) -> EditRes
             piece.model_parts = entry.model_parts;
             piece.model_transform = entry.model_transform.unwrap_or_default();
             piece.model_far = entry.model_far;
+        }
+        if let Some(product) = spec.product.as_deref().map(str::trim) {
+            piece.info.product = (!product.is_empty()).then(|| product.to_owned());
         }
         piece.color = spec.color.or(piece.color);
         if let Some(raw) = &spec.mat {
@@ -3161,5 +3173,72 @@ mod place_tests {
             )
             .is_err()
         );
+    }
+}
+
+#[cfg(test)]
+mod product_refs {
+    use newera_core::{Document, SharedDocument};
+    use serde_json::json;
+
+    /// Without the hosted service nothing rewrites a `product:` reference,
+    /// and the call says where products live instead of looking for a file
+    /// named `product:…` or keeping an id no library has.
+    #[test]
+    fn a_product_reference_is_refused_without_the_hosted_service() {
+        let document = SharedDocument::new(Document::default());
+        let placed = crate::call(
+            document.clone(),
+            "place",
+            json!({"items": [{"model": "product:p1", "at": [100, 100]}]}),
+        );
+        assert_eq!(
+            placed.unwrap_err(),
+            "product:p1: products exist only on the hosted service"
+        );
+        let from_defaults = crate::call(
+            document.clone(),
+            "place",
+            json!({"items": [{"at": [100, 100]}], "defaults": {"model": "product:p1"}}),
+        );
+        assert_eq!(
+            from_defaults.unwrap_err(),
+            "product:p1: products exist only on the hosted service"
+        );
+        let assigned = crate::call(
+            document.clone(),
+            "edit_finishes",
+            json!({"action": "assign", "surface": "r1:floor", "product": "product:p2"}),
+        );
+        assert_eq!(
+            assigned.unwrap_err(),
+            "product:p2: products exist only on the hosted service"
+        );
+        assert_eq!(document.read().revision(), 0, "nothing was written");
+    }
+
+    /// `product=` names the shop product a placed piece is; a blank one is
+    /// none.
+    #[test]
+    fn a_placed_piece_keeps_its_product() {
+        let document = SharedDocument::new(Document::default());
+        crate::call(
+            document.clone(),
+            "place",
+            json!({"items": [
+                {"cat": "sofa-3", "at": [100, 100], "product": " p9 "},
+                {"cat": "sofa-3", "at": [400, 100], "product": ""},
+                {"cat": "sofa-3", "at": [700, 100]}
+            ]}),
+        )
+        .unwrap();
+        let products: Vec<Option<String>> = document
+            .read()
+            .home()
+            .furniture
+            .iter()
+            .map(|f| f.info.product.clone())
+            .collect();
+        assert_eq!(products, [Some("p9".to_owned()), None, None]);
     }
 }

@@ -82,13 +82,7 @@ pub async fn store(
     from: i64,
     bytes: &[u8],
 ) -> sqlx::Result<Stored> {
-    let others: i64 = sqlx::query_scalar(
-        "select coalesce(sum(size), 0)::bigint from projects where account_id = $1 and id <> $2",
-    )
-    .bind(account)
-    .bind(project)
-    .fetch_one(db)
-    .await?;
+    let others = kept_bytes(db, account, Some(project), None).await?;
     let size = i64::try_from(bytes.len()).unwrap_or(i64::MAX);
     if let Some(why) = no_room(plan, others.saturating_add(size)) {
         return Ok(Stored::Full(why));
@@ -105,6 +99,34 @@ pub async fn store(
     .fetch_optional(db)
     .await?;
     Ok(saved.map_or(Stored::Stale, Stored::Saved))
+}
+
+/// The bytes an account keeps, which its plan's storage holds: its
+/// projects but `except_project`, and its products' files but the model of
+/// `except_model` (one about to be replaced).
+///
+/// # Errors
+///
+/// When the database fails.
+pub async fn kept_bytes(
+    db: &PgPool,
+    account: &str,
+    except_project: Option<&str>,
+    except_model: Option<&str>,
+) -> sqlx::Result<i64> {
+    sqlx::query_scalar(
+        "select ((select coalesce(sum(size), 0) from projects
+                 where account_id = $1 and id is distinct from $2)
+              + (select coalesce(sum(a.size), 0) from product_assets a
+                 join products p on p.id = a.product_id
+                 where p.account_id = $1
+                   and not (a.kind = 'model' and a.product_id is not distinct from $3)))::bigint",
+    )
+    .bind(account)
+    .bind(except_project)
+    .bind(except_model)
+    .fetch_one(db)
+    .await
 }
 
 /// How many bytes of projects the plan stores.
@@ -198,12 +220,11 @@ pub async fn make(
     plan: &Plan,
     name: Option<&str>,
 ) -> sqlx::Result<Made> {
-    let (count, used): (i64, i64) = sqlx::query_as(
-        "select count(*), coalesce(sum(size), 0)::bigint from projects where account_id = $1",
-    )
-    .bind(account)
-    .fetch_one(db)
-    .await?;
+    let count: i64 = sqlx::query_scalar("select count(*) from projects where account_id = $1")
+        .bind(account)
+        .fetch_one(db)
+        .await?;
+    let used = kept_bytes(db, account, None, None).await?;
     let most = plan.limits["projects"].as_i64().unwrap_or(0);
     if count >= most {
         return Ok(Made::TooMany(most));
@@ -336,6 +357,34 @@ impl Engine {
         name: &str,
         args: Value,
     ) -> anyhow::Result<Value> {
+        self.call_with(db, public_url, editor_url, account, plan, name, args, &[])
+            .await
+    }
+
+    /// [`Engine::call`], with `files` — (path inside the project, bytes) —
+    /// put among the project's files first, in the copy the call runs on: a
+    /// shop product's model for the `place` that uses it
+    /// (`crate::staging`). The next save carries them in the `.newera`.
+    ///
+    /// # Errors
+    ///
+    /// As [`Engine::call`], and when a file cannot be written.
+    ///
+    /// # Panics
+    ///
+    /// As [`Engine::call`].
+    #[allow(clippy::too_many_arguments, reason = "each is one fact about the call")]
+    pub async fn call_with(
+        &self,
+        db: &PgPool,
+        public_url: &str,
+        editor_url: &str,
+        account: &str,
+        plan: &Plan,
+        name: &str,
+        args: Value,
+        files: &[(String, Vec<u8>)],
+    ) -> anyhow::Result<Value> {
         match name {
             "projects" => return self.list(db, account, plan).await,
             "file" if args["action"] == "new" => {
@@ -371,6 +420,7 @@ impl Engine {
 
         let loaded = self.loaded(db, account, plan).await?;
         *loaded.touched.lock().expect("touched") = Instant::now();
+        put_files(&loaded, files).await?;
 
         // Files go where the engine says, and come back as a link.
         let mut args = args;
@@ -693,6 +743,43 @@ impl Engine {
         Ok(loaded)
     }
 
+    /// Puts `bytes` at `path` among the files of the account's copy open
+    /// now, when that copy draws something with the file, and saves the
+    /// project with it: a product's model attached after it was placed with
+    /// a placeholder. False when no copy is open, none of it uses the file,
+    /// or the project changed meanwhile (it then takes the file the next
+    /// time the product is placed there).
+    ///
+    /// # Errors
+    ///
+    /// When the file cannot be written or the database fails.
+    ///
+    /// # Panics
+    ///
+    /// If another thread panicked while holding the open projects.
+    pub async fn swap_in(
+        &self,
+        db: &PgPool,
+        account: &str,
+        plan: &Plan,
+        path: &str,
+        bytes: &[u8],
+    ) -> anyhow::Result<bool> {
+        let Some(loaded) = self.loaded.lock().expect("loaded").get(account).cloned() else {
+            return Ok(false);
+        };
+        let uses = loaded
+            .doc
+            .read()
+            .variants()
+            .any(|v| v.home().asset_paths().iter().any(|p| p == path));
+        if !uses {
+            return Ok(false);
+        }
+        put_files(&loaded, &[(path.to_owned(), bytes.to_vec())]).await?;
+        Ok(self.save(db, account, plan, &loaded).await?.is_none())
+    }
+
     /// Forgets the account's copy of `project` if it is older than
     /// `revision`, which was just kept: the next call loads the kept one. A
     /// copy at `revision` or later is the kept one already. Waits for a copy
@@ -767,6 +854,38 @@ impl Engine {
     }
 }
 
+/// Writes `files` where the copy's relative paths resolve
+/// (`Document::asset_dir`) — its unpacked bundle, or its own directory for a
+/// project that had no files, which then becomes where they resolve.
+async fn put_files(loaded: &Loaded, files: &[(String, Vec<u8>)]) -> anyhow::Result<()> {
+    if files.is_empty() {
+        return Ok(());
+    }
+    let dir = {
+        let mut doc = loaded.doc.write();
+        if let Some(dir) = doc.asset_dir() {
+            dir
+        } else {
+            doc.set_asset_dir(Some(loaded.dir.clone()));
+            loaded.dir.clone()
+        }
+    };
+    for (path, bytes) in files {
+        if !Path::new(path)
+            .components()
+            .all(|c| matches!(c, std::path::Component::Normal(_)))
+        {
+            anyhow::bail!("{path} is not a path inside the project");
+        }
+        let target = dir.join(path);
+        if let Some(parent) = target.parent() {
+            tokio::fs::create_dir_all(parent).await?;
+        }
+        tokio::fs::write(&target, bytes).await?;
+    }
+    Ok(())
+}
+
 /// Opens the project written at `file` the way the desktop opens it, but
 /// unpacks its files inside the copy's own directory `dir` rather than the
 /// shared bundle cache: whatever the load unpacked goes with the copy.
@@ -807,8 +926,9 @@ fn clean_name(raw: &str) -> String {
         .to_owned()
 }
 
-/// Keeps an export for a day and answers its link.
-async fn keep_file(
+/// Keeps an export for a day and answers its link: the engine's exports,
+/// and the estimate's sheet.
+pub(crate) async fn keep_file(
     db: &PgPool,
     public_url: &str,
     account: &str,

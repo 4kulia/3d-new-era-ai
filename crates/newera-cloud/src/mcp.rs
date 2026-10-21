@@ -169,9 +169,9 @@ async fn answer(
                     json!({"content": [{"type": "text", "text": format!("{name} runs only in the desktop app")}], "isError": true}),
                 ));
             }
-            // The service's own tools — the projects, the product library —
-            // are answered here, from the database: never by the tab, and
-            // never by the editor's tools.
+            // The service's own tools — the projects, the product library,
+            // the estimate — are answered here, from the database: never by
+            // the tab, and never by the editor's tools.
             let hosted = newera_mcp::surface::HOSTED_ONLY.contains(&name);
             let args = params.get("arguments").cloned().unwrap_or(Value::Null);
             if hosted && let Some(why) = newera_mcp::surface::unknown_hosted_argument(name, &args) {
@@ -180,23 +180,53 @@ async fn answer(
                     json!({"content": [{"type": "text", "text": why}], "isError": true}),
                 ));
             }
-            if crate::products::answers(name) {
-                return Some(
-                    match crate::products::call(app, &account.id, name, &args).await {
-                        Ok(mut answer) => {
-                            newera_mcp::output::structure_json(&mut answer);
-                            result(&id, answer)
-                        }
-                        Err(err) => {
-                            tracing::error!("{name}: {err:#}");
-                            result(
-                                &id,
-                                json!({"content": [{"type": "text", "text": format!("{name} failed on the server: {err}")}], "isError": true}),
-                            )
-                        }
-                    },
-                );
+            if crate::products::answers(name) || crate::estimate::answers(name) {
+                let answered = if crate::estimate::answers(name) {
+                    crate::estimate::call(app, &account.id, name, &args).await
+                } else {
+                    crate::products::call(app, &account.id, name, &args).await
+                };
+                return Some(match answered {
+                    Ok(mut answer) => {
+                        newera_mcp::output::structure_json(&mut answer);
+                        result(&id, answer)
+                    }
+                    Err(err) => {
+                        tracing::error!("{name}: {err:#}");
+                        result(
+                            &id,
+                            json!({"content": [{"type": "text", "text": format!("{name} failed on the server: {err}")}], "isError": true}),
+                        )
+                    }
+                });
             }
+            // Shop products the call names are made ready first: checked
+            // against the account's library, their files fetched, the call
+            // rewritten to what the editor reads (`crate::staging`).
+            let (args, files, notes) = match crate::staging::stage(
+                &app.db,
+                &account.id,
+                name,
+                &args,
+            )
+            .await
+            {
+                Ok(Ok(Some(staged))) => (staged.args, staged.files, staged.notes),
+                Ok(Ok(None)) => (args, Vec::new(), Vec::new()),
+                Ok(Err(why)) => {
+                    return Some(result(
+                        &id,
+                        json!({"content": [{"type": "text", "text": why}], "isError": true}),
+                    ));
+                }
+                Err(err) => {
+                    tracing::error!("staging {name}: {err:#}");
+                    return Some(result(
+                        &id,
+                        json!({"content": [{"type": "text", "text": format!("{name} failed on the server: {err}")}], "isError": true}),
+                    ));
+                }
+            };
             // The person's own editor, when it is open and signed in; the
             // cloud project otherwise. A render always runs here, on the
             // server: the tab saves what it has first.
@@ -207,11 +237,31 @@ async fn answer(
                 app.rooms.owned_by(&account.id)
             };
             if !render && let Some(room) = room {
+                // The files first, so the call that uses them finds them.
+                for (path, bytes) in &files {
+                    if let Err(why) = newera_relay::stage_in(
+                        &app.rooms,
+                        &room,
+                        path,
+                        bytes,
+                        crate::staging::STAGE_WAIT,
+                    )
+                    .await
+                    {
+                        return Some(result(
+                            &id,
+                            json!({"content": [{"type": "text", "text": format!("the editor tab did not take the file {path} ({why}): reload the tab and call again")}], "isError": true}),
+                        ));
+                    }
+                }
+                let mut sent = message.clone();
+                sent["params"]["arguments"] = args;
                 // The tab may run an editor older than this service: its
                 // answer gets its fields here, as the engine's do.
-                let mut answer = newera_relay::answer_in(&app.rooms, &room, message).await;
+                let mut answer = newera_relay::answer_in(&app.rooms, &room, &sent).await;
                 if let Some(result) = answer.as_mut().and_then(|a| a.get_mut("result")) {
                     newera_mcp::output::structure_json(result);
+                    add_notes(result, &notes);
                 }
                 return answer;
             }
@@ -232,7 +282,7 @@ async fn answer(
             };
             match app
                 .engine
-                .call(
+                .call_with(
                     &app.db,
                     &app.config.public_url,
                     &app.config.editor_url,
@@ -240,11 +290,13 @@ async fn answer(
                     &plan,
                     name,
                     args,
+                    &files,
                 )
                 .await
             {
                 Ok(mut answer) => {
                     newera_mcp::output::structure_json(&mut answer);
+                    add_notes(&mut answer, &notes);
                     if let Some(note) = note {
                         add_note(&mut answer, &note);
                     }
@@ -270,10 +322,10 @@ async fn answer(
 /// The tools that render: always run by the engine, never by a tab.
 const RENDERS: [&str; 3] = ["render_plan", "render_3d", "render_photo"];
 
-/// How long a render waits for the tab to save what it has: one upload of
+/// How long a render or an estimate waits for the tab to save what it has: one upload of
 /// the project, started the moment the tab is asked. A chosen bound, not a
 /// measured upload time; past it the render goes ahead on what is stored.
-const FLUSH_WAIT: Duration = Duration::from_secs(10);
+pub(crate) const FLUSH_WAIT: Duration = Duration::from_secs(10);
 
 /// Before a render, while the account's tab holds the room: the tab saves
 /// its pending change and says at which revision the project is kept, so the
@@ -365,6 +417,15 @@ async fn elsewhere(app: &AppState, account: &str, active: Option<&str>, shown: &
         None => format!(
             "This render is of the active project, {active}; the editor tab shows a project this account does not have ({shown}), and its edits are not in it."
         ),
+    }
+}
+
+/// The notes staging left for an answer that did what was asked.
+fn add_notes(answer: &mut Value, notes: &[String]) {
+    if answer["isError"] != true {
+        for note in notes {
+            add_note(answer, note);
+        }
     }
 }
 

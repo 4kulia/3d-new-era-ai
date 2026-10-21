@@ -26,6 +26,8 @@ pub mod render_web;
 mod screens;
 #[cfg(any(target_arch = "wasm32", test))]
 mod server_projects;
+#[cfg(any(target_arch = "wasm32", test))]
+mod staged_asset;
 mod tabs;
 mod theme;
 mod video;

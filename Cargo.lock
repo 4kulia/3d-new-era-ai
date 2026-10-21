@@ -3437,9 +3437,11 @@ dependencies = [
  "base64 0.23.1",
  "futures-util",
  "getrandom 0.4.3",
+ "newera-catalog",
  "newera-core",
  "newera-mcp",
  "newera-relay",
+ "newera-render",
  "newera-sh3d",
  "newera-shop",
  "reqwest",
@@ -3561,6 +3563,7 @@ name = "newera-relay"
 version = "3.1.0"
 dependencies = [
  "axum",
+ "base64 0.23.1",
  "futures-util",
  "getrandom 0.4.3",
  "reqwest",

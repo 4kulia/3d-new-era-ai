@@ -171,6 +171,10 @@ fn rounded(mut takeoff: Takeoff) -> Takeoff {
             r(&mut s.gross);
             r(&mut s.openings);
             r(&mut s.net);
+            for (width, height) in &mut s.spans {
+                r(width);
+                r(height);
+            }
         }
     }
     takeoff
@@ -186,6 +190,7 @@ fn area(
     waste: Option<f64>,
     m2: (f64, f64),
     cut_by: &[u64],
+    spans: &[(f64, f64)],
 ) -> SurfaceArea {
     SurfaceArea {
         surface: surface.parse::<Surface>().unwrap(),
@@ -198,6 +203,7 @@ fn area(
         openings: m2.1,
         net: ((m2.0 - m2.1) * 1e6).round() / 1e6,
         cut_by: cut_by.iter().copied().map(FurnitureId).collect(),
+        spans: spans.to_vec(),
     }
 }
 
@@ -221,6 +227,12 @@ fn arc_m2() -> f64 {
     (radius * std::f64::consts::FRAC_PI_2 * 250.0 / 1e4 * 1e6).round() / 1e6
 }
 
+/// That face's length, cm.
+fn arc_cm() -> f64 {
+    let radius = 100.0 / std::f64::consts::FRAC_PI_4.sin() + 7.5;
+    (radius * std::f64::consts::FRAC_PI_2 * 1e6).round() / 1e6
+}
+
 #[test]
 fn the_whole_house_is_measured_per_product() {
     let got = rounded(takeoff(&house(), Only::default()));
@@ -239,6 +251,7 @@ fn the_whole_house_is_measured_per_product() {
                         Some(5.0),
                         (12.0, 0.0),
                         &[],
+                        &[],
                     ),
                     // Less the stair's 90 × 200 cm void.
                     area(
@@ -249,6 +262,7 @@ fn the_whole_house_is_measured_per_product() {
                         None,
                         Some(5.0),
                         (10.2, 0.0),
+                        &[],
                         &[],
                     ),
                 ],
@@ -266,6 +280,7 @@ fn the_whole_house_is_measured_per_product() {
                         None,
                         (10.2, 0.0),
                         &[],
+                        &[],
                     ),
                     // 392.5 × 130 cm; the union of the two windows within the
                     // band (9 000 + 8 000 − 3 000 cm²) and the door's top
@@ -279,6 +294,7 @@ fn the_whole_house_is_measured_per_product() {
                         None,
                         (5.1025, 2.12),
                         &[30, 31, 32],
+                        &[(392.5, 130.0)],
                     ),
                     // The slope passes 300 cm half way: a triangle of
                     // 150 cm × 50 cm.
@@ -291,6 +307,7 @@ fn the_whole_house_is_measured_per_product() {
                         None,
                         (0.375, 0.0),
                         &[],
+                        &[(150.0, 50.0)],
                     ),
                     // 400 × 250 cm less its own window, 60 × 100 cm.
                     area(
@@ -302,6 +319,7 @@ fn the_whole_house_is_measured_per_product() {
                         None,
                         (10.0, 0.6),
                         &[33],
+                        &[(400.0, 250.0)],
                     ),
                 ],
             ),
@@ -316,6 +334,7 @@ fn the_whole_house_is_measured_per_product() {
                     None,
                     (arc_m2(), 0.0),
                     &[],
+                    &[(arc_cm(), 250.0)],
                 )],
             ),
             product(
@@ -332,6 +351,7 @@ fn the_whole_house_is_measured_per_product() {
                     None,
                     (9.1875, 0.0),
                     &[],
+                    &[(307.5, 350.0)],
                 )],
             ),
             product(
@@ -348,6 +368,7 @@ fn the_whole_house_is_measured_per_product() {
                         Some(10.0),
                         (4.71, 1.26),
                         &[30, 32],
+                        &[(392.5, 120.0)],
                     ),
                 ],
             ),
@@ -391,7 +412,8 @@ fn a_room_and_a_product_narrow_it_down() {
                         None,
                         Some(5.0),
                         (10.2, 0.0),
-                        &[]
+                        &[],
+                        &[],
                     )],
                 ),
                 product(
@@ -404,7 +426,8 @@ fn a_room_and_a_product_narrow_it_down() {
                         Some(2),
                         None,
                         (10.0, 0.6),
-                        &[33]
+                        &[33],
+                        &[(400.0, 250.0)],
                     )],
                 ),
             ],
@@ -748,6 +771,98 @@ fn a_side_facing_two_rooms_is_split_between_them() {
         .map(|s| (s.room, s.gross))
         .collect();
     assert_eq!(w1, vec![(Some(RoomId(6)), 4.625), (Some(RoomId(7)), 4.625)]);
+}
+
+/// Wallpaper hangs in drops across each stretch of face on its own: a
+/// partition standing against a side cuts it in two, even where one room
+/// faces both pieces, and a piece is as tall as its highest end.
+#[test]
+fn each_stretch_of_a_face_is_its_own_span() {
+    let mut home = two_rooms();
+    home.rooms.truncate(1);
+    home.rooms[0].points[1].x = 400.0;
+    home.rooms[0].points[2].x = 400.0;
+    home.walls[0].height_at_end = Some(300.0);
+    let spans = |home: &Home, surface: &str| -> Vec<(f64, f64)> {
+        rounded(takeoff(home, Only::default())).finishes[0]
+            .surfaces
+            .iter()
+            .filter(|s| s.surface.to_string() == surface)
+            .flat_map(|s| s.spans.clone())
+            .collect()
+    };
+    // 7.5 to 192.5 cm along w1 and 207.5 to 392.5, the top rising from
+    // 250 cm at 0 to 300 cm at 400: 250 + 50 × 192.5 / 400 and
+    // 250 + 50 × 392.5 / 400.
+    assert_eq!(
+        spans(&home, "w1:right"),
+        vec![(185.0, 274.0625), (185.0, 299.0625)]
+    );
+    home.finish_assignments[0].band = Some(Band {
+        from: 100.0,
+        to: 280.0,
+    });
+    assert_eq!(
+        spans(&home, "w1:right"),
+        vec![(185.0, 174.0625), (185.0, 180.0)]
+    );
+    // Falling from 300 to 250 cm, each piece is tallest at its start; the
+    // outer side runs 7.5 cm past each end, where the top holds level.
+    home.finish_assignments[0].band = None;
+    home.walls[0].height = 300.0;
+    home.walls[0].height_at_end = Some(250.0);
+    home.finish_assignments
+        .push(finish("w1:left", "paint", None, None, None));
+    assert_eq!(
+        spans(&home, "w1:right"),
+        vec![(185.0, 299.0625), (185.0, 274.0625)]
+    );
+    assert_eq!(spans(&home, "w1:left"), vec![(415.0, 300.0)]);
+}
+
+/// A curved wall's face is one stretch, as tall as the band lets it be.
+#[test]
+fn a_curved_face_is_one_span_cut_to_its_band() {
+    let mut home = house();
+    home.finish_assignments = vec![finish(
+        "w3:right",
+        "plaster",
+        Some((100.0, 400.0)),
+        None,
+        None,
+    )];
+    let taken = rounded(takeoff(&home, Only::default()));
+    assert_eq!(taken.finishes[0].surfaces[0].spans, vec![(arc_cm(), 150.0)]);
+    // Rising from 250 to 350 cm along it, a band from 300 cm covers the
+    // second half of the arc, up to 50 cm.
+    home.walls[2].height_at_end = Some(350.0);
+    home.finish_assignments[0].band = Some(Band {
+        from: 300.0,
+        to: 400.0,
+    });
+    let taken = rounded(takeoff(&home, Only::default()));
+    let half = (arc_cm() / 2.0 * 1e6).round() / 1e6;
+    assert_eq!(taken.finishes[0].surfaces[0].spans, vec![(half, 50.0)]);
+}
+
+/// A band above the whole top of a stretch leaves it no span.
+#[test]
+fn a_band_above_the_top_has_no_span() {
+    let mut home = two_rooms();
+    home.finish_assignments[0].band = Some(Band {
+        from: 260.0,
+        to: 300.0,
+    });
+    let taken = rounded(takeoff(&home, Only::default()));
+    let w1: Vec<&SurfaceArea> = taken.finishes[0]
+        .surfaces
+        .iter()
+        .filter(|s| s.surface.to_string() == "w1:right")
+        .collect();
+    assert!(
+        w1.iter().all(|s| s.spans.is_empty() && s.gross == 0.0),
+        "{w1:?}"
+    );
 }
 
 #[test]

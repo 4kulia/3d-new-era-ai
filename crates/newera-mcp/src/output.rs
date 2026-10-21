@@ -434,6 +434,12 @@ fn product_fields() -> Vec<(&'static str, Value)> {
             "prices",
             list("Price history: [price, currency, sale_unit, origin, seen (unix seconds)]"),
         ),
+        (
+            "files",
+            list(
+                "Its 3D model, once it has one: [kind (model), source (shop, generated or placeholder), generator, bytes, kept (unix seconds)]",
+            ),
+        ),
     ]
 }
 
@@ -673,12 +679,12 @@ pub(crate) fn schema(name: &str) -> Option<Value> {
                 (
                     "finishes",
                     list(
-                        "By product: {product, net_m2, gross_m2, openings_m2, surfaces: [{surface, level?, room?, band?, coats?, waste?, gross_m2, openings_m2, net_m2, openings?}]}",
+                        "By product: {product, net_m2, gross_m2, openings_m2, surfaces: [{surface, level?, room?, band?, coats?, waste?, gross_m2, openings_m2, net_m2, openings?, spans_cm (wall sides): face stretches the band covers [width, tallest height in band]}]}",
                     ),
                 ),
                 (
                     "furniture",
-                    list("Pieces bought, by product: {product, pieces, ids}"),
+                    list("Pieces bought, by product: {product, pieces, ids, rooms?}"),
                 ),
                 (
                     "gone",
@@ -1120,8 +1126,90 @@ pub(crate) fn schema(name: &str) -> Option<Value> {
         "edit_products" => {
             let mut fields = product_fields();
             fields.push(("removed", flag("The product was deleted")));
+            fields.push((
+                "drawn",
+                text("For attach_model: where the new model is drawn already, and where it waits for the product's next placement"),
+            ));
             shape(&fields, &["id"])
         }
+        "estimate" => shape(
+            &[
+                ("project", object("The project priced: {id, name}")),
+                (
+                    "from",
+                    text("Where its quantities were measured: tab (the open editor) or server"),
+                ),
+                ("group_by", text("shop, room or kind")),
+                (
+                    "groups",
+                    list(
+                        "{name, lines, totals per currency and VAT}: lines {kind, product?, line?, shop, title, url?, quantity, unit, packs?, need? [amount, unit], unit_price, currency, vat_included?, total (null: unpriced), rooms?, surfaces?, pieces?, notes?}",
+                    ),
+                ),
+                (
+                    "totals",
+                    list(
+                        "Per shop, currency and VAT basis: {shop, currency, vat (included, excluded, unknown), total, complete}",
+                    ),
+                ),
+                (
+                    "by_currency",
+                    list(
+                        "Per currency and VAT basis, never converted: {currency, vat, total, complete}",
+                    ),
+                ),
+                ("complete", flag("Every line is priced")),
+                (
+                    "gone",
+                    list("Finishes whose surface was deleted: {surface, product}"),
+                ),
+                (
+                    "saved",
+                    list("The project's saved estimates: [id, name, saved (unix seconds)]"),
+                ),
+                (
+                    "saved_as",
+                    object("For saved: the saved estimate read, {id, name, saved, project}"),
+                ),
+                (
+                    "csv",
+                    text("For format=csv: the sheet's download link, good for a day"),
+                ),
+                (
+                    "note",
+                    text(
+                        "Why the quantities are of the active project as stored, not of what the open editor shows",
+                    ),
+                ),
+            ],
+            &["complete"],
+        ),
+        "edit_estimate" => shape(
+            &[
+                (
+                    "line",
+                    object("For add_line: the line as estimate shows it"),
+                ),
+                ("removed", flag("The line or saved estimate was deleted")),
+                ("id", text("For remove_line: the line removed")),
+                (
+                    "saved",
+                    object("For save and remove_saved: {id, name, saved (unix seconds), project}"),
+                ),
+                (
+                    "by_currency",
+                    list("For save: the totals kept, per currency and VAT basis"),
+                ),
+                ("complete", flag("For save: every line kept is priced")),
+                (
+                    "note",
+                    text(
+                        "For save: why it is of the active project as stored, not of what the open editor shows",
+                    ),
+                ),
+            ],
+            &[],
+        ),
         _ => return None,
     })
 }

@@ -52,6 +52,11 @@ pub struct SurfaceArea {
     pub net: f64,
     /// The doors and windows taken off.
     pub cut_by: Vec<FurnitureId>,
+    /// A wall side's uninterrupted stretches of face that the band covers,
+    /// in the order they come along the wall: (width along the face, tallest
+    /// height covered within the band), cm — what wallpaper is hung in drops
+    /// by. Empty for a floor or ceiling, and where the band is above the top.
+    pub spans: Vec<(f64, f64)>,
 }
 
 /// Everything one finish product covers.
@@ -195,6 +200,7 @@ fn surface_area(
                     gross: plan_area(&room.points, &voids),
                     openings: 0.0,
                     cut_by: Vec::new(),
+                    spans: Vec::new(),
                 }],
             )
         }
@@ -225,6 +231,7 @@ fn surface_area(
                     openings,
                     net: gross - openings,
                     cut_by: stretch.cut_by,
+                    spans: stretch.spans,
                 }
             })
             .collect(),
@@ -237,6 +244,8 @@ struct Stretch {
     gross: f64,
     openings: f64,
     cut_by: Vec<FurnitureId>,
+    /// (width, tallest covered height) of each uninterrupted piece, cm.
+    spans: Vec<(f64, f64)>,
 }
 
 /// The plan area of `points` less what `voids` take out of it, cm².
@@ -269,11 +278,15 @@ fn wall_area(
     let (start, end) = (wall.height, wall.height_at_end.unwrap_or(wall.height));
     if wall.is_arc() {
         // Openings never cut a curved wall (`wall_cuts`).
+        let face = arc_face(wall, side);
         return vec![Stretch {
             room: facing_room(home, wall, side),
-            gross: band_area(arc_face(wall, side), start, end, lo, hi),
+            gross: band_area(face, start, end, lo, hi),
             openings: 0.0,
             cut_by: Vec::new(),
+            spans: band_span(0.0, face, face, start, end, lo, hi)
+                .into_iter()
+                .collect(),
         }];
     }
     let length = wall.start.distance(wall.end);
@@ -317,6 +330,7 @@ fn wall_area(
             .collect();
         let holes: Vec<[f64; 4]> = clipped.iter().map(|(_, hole)| *hole).collect();
         let gross = span_area(from, to, length, start, end, lo, hi);
+        let piece = band_span(from, to, length, start, end, lo, hi);
         let openings = union_area(&holes);
         let cut = clipped.into_iter().map(|(id, _)| id);
         if !stretches.iter().any(|s| s.room == room) {
@@ -325,6 +339,7 @@ fn wall_area(
                 gross: 0.0,
                 openings: 0.0,
                 cut_by: Vec::new(),
+                spans: Vec::new(),
             });
         }
         let at = stretches
@@ -334,6 +349,7 @@ fn wall_area(
         let stretch = &mut stretches[at];
         stretch.gross += gross;
         stretch.openings += openings;
+        stretch.spans.extend(piece);
         for id in cut {
             if !stretch.cut_by.contains(&id) {
                 stretch.cut_by.push(id);
@@ -406,6 +422,36 @@ fn arc_face(wall: &Wall, side: Side) -> f64 {
         wall.thickness / 2.0
     };
     (radius + offset) * sweep.abs()
+}
+
+/// The part of `from..to` cm along a face `length` long that the band
+/// `lo..hi` covers, as (its width, the tallest height it covers there), cm;
+/// `None` where the band is above the top all along. The top runs straight
+/// from `start` to `end` and holds level past the ends, so it crosses the
+/// band's bottom at most once: the covered part is one piece, tallest at
+/// one of its ends.
+fn band_span(
+    from: f64,
+    to: f64,
+    length: f64,
+    start: f64,
+    end: f64,
+    lo: f64,
+    hi: f64,
+) -> Option<(f64, f64)> {
+    let top = |s: f64| start + (end - start) * (s / length).clamp(0.0, 1.0);
+    let covered = |s: f64| top(s).clamp(lo, hi) - lo;
+    let (a, b) = (covered(from), covered(to));
+    let width = match (a > 0.0, b > 0.0) {
+        (false, false) => return None,
+        (true, true) => to - from,
+        (at_start, _) => {
+            // Where the top meets the band's bottom, within the piece.
+            let at = ((lo - start) / (end - start) * length).clamp(from, to);
+            if at_start { at - from } else { to - at }
+        }
+    };
+    Some((width, a.max(b)))
 }
 
 /// The area between the heights `lo` and `hi` under a wall's top along

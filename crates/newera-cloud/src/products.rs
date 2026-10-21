@@ -206,6 +206,19 @@ async fn shown(db: &PgPool, row: &Row) -> sqlx::Result<Value> {
             .map(|(price, currency, unit, origin, at)| json!([price, currency, unit, origin, at]))
             .collect::<Vec<_>>(),
     });
+    let files: Vec<(String, String, Option<String>, i32, i64)> = sqlx::query_as(
+        "select kind, source, generator, size, extract(epoch from created_at)::bigint
+         from product_assets where product_id = $1 and kind = 'model'",
+    )
+    .bind(&row.id)
+    .fetch_all(db)
+    .await?;
+    if !files.is_empty() {
+        shown["files"] = files
+            .iter()
+            .map(|(kind, source, generator, size, at)| json!([kind, source, generator, size, at]))
+            .collect();
+    }
     // Unknown is absent, like every default: the title is text or not there.
     if let Some(title) = row.title() {
         shown["title"] = title;
@@ -424,8 +437,10 @@ async fn edit(app: &AppState, account: &str, args: &Value) -> anyhow::Result<Val
         ));
     };
     let action = args["action"].as_str().unwrap_or_default();
-    if !matches!(action, "set" | "refresh" | "remove") {
-        return Ok(refused("edit_products: action is set, refresh or remove"));
+    if !matches!(action, "set" | "refresh" | "attach_model" | "remove") {
+        return Ok(refused(
+            "edit_products: action is set, refresh, attach_model or remove",
+        ));
     }
     let Some(row) = by_id(&app.db, account, id).await? else {
         return Ok(refused(format!("no product {id} (products lists them)")));
@@ -439,8 +454,61 @@ async fn edit(app: &AppState, account: &str, args: &Value) -> anyhow::Result<Val
             Ok(said(&json!({"id": id, "removed": true})))
         }
         "set" => set(&app.db, row, args).await,
+        "attach_model" => attach_model(app, account, &row, args).await,
         _ => refresh(app, account, row).await,
     }
+}
+
+/// Downloads the .glb at `url` and keeps it as the product's model
+/// (`crate::models`): the shop's own file, or — with `generator`, what made
+/// it — a generated one; it counts against the plan's storage. Where the
+/// product is drawn already, it replaces the model there
+/// (`crate::staging::swap`); the answer says where (`drawn`).
+async fn attach_model(
+    app: &AppState,
+    account: &str,
+    row: &Row,
+    args: &Value,
+) -> anyhow::Result<Value> {
+    let Some(url) = args["url"]
+        .as_str()
+        .map(str::trim)
+        .filter(|u| !u.is_empty())
+    else {
+        return Ok(refused(
+            "edit_products action=attach_model: url is the link to the .glb file",
+        ));
+    };
+    if row.kind() != Kind::Furniture {
+        return Ok(refused(format!(
+            "{} is a finish: a 3D model is for a piece of furniture",
+            row.id
+        )));
+    }
+    let bytes = match crate::models::download(&app.links, url).await? {
+        Ok(bytes) => bytes,
+        Err(why) => return Ok(refused(why)),
+    };
+    let plan = crate::accounts::plan_of(&app.db, account).await?;
+    let kept = crate::engine::kept_bytes(&app.db, account, None, Some(&row.id)).await?;
+    let size = i64::try_from(bytes.len()).unwrap_or(i64::MAX);
+    if let Some(why) = crate::engine::no_room(&plan, kept.saturating_add(size)) {
+        return Ok(refused(format!("the model was not kept: {why}")));
+    }
+    let generator = args["generator"].as_str();
+    let source = if generator.is_some_and(|g| !g.trim().is_empty()) {
+        crate::models::Source::Generated
+    } else {
+        crate::models::Source::Shop
+    };
+    let bytes = match crate::models::keep(&app.db, &row.id, bytes, source, generator).await? {
+        Ok(bytes) => bytes,
+        Err(why) => return Ok(refused(format!("{url}: {why}"))),
+    };
+    let drawn = crate::staging::swap(app, account, &plan, &row.id, &bytes).await?;
+    let mut answer = shown(&app.db, row).await?;
+    answer["drawn"] = json!(drawn);
+    Ok(said(&answer))
 }
 
 /// Fills or corrects fields as the agent's; `kind` changes what the

@@ -104,6 +104,23 @@ enum ToTab {
     /// project when it is bound to none. An editor older than this message
     /// ignores it and never answers; whoever asks waits a bounded time.
     Flush { id: u64 },
+    /// Keep this file in the tab's project, at `path` relative to where its
+    /// files are, and answer with a `result` under `id` carrying `{"path"}`:
+    /// a shop product's model, sent by the hosted service before the call
+    /// that places it. `data` is the file's bytes in standard base64. An
+    /// editor older than this message ignores it and never answers; whoever
+    /// sends it waits a bounded time.
+    ///
+    /// `replace`: the file replaces one already placed (a model attached
+    /// later); the tab keeps it only when its document uses that path, and
+    /// says whether it did (`{"path", "kept"}`).
+    Asset {
+        id: u64,
+        path: String,
+        data: String,
+        #[serde(skip_serializing_if = "std::ops::Not::not")]
+        replace: bool,
+    },
 }
 
 #[derive(Debug, Deserialize)]
@@ -826,6 +843,70 @@ pub async fn flush_in(rooms: &Rooms, room: &str, within: Duration) -> Result<Val
     ask_tab(rooms, room, None, within, |id| ToTab::Flush { id }).await
 }
 
+/// Hands the account's tab a file to keep in its project before a call
+/// that uses it (`ToTab::Asset`), and waits up to `within` for the tab to
+/// say it has it: `{"path"}` as the tab kept it.
+///
+/// # Errors
+///
+/// When the tab gave no answer to act on, and why.
+///
+/// # Panics
+///
+/// If another thread panicked while holding the rooms.
+pub async fn stage_in(
+    rooms: &Rooms,
+    room: &str,
+    path: &str,
+    bytes: &[u8],
+    within: Duration,
+) -> Result<Value, String> {
+    send_file(rooms, room, path, bytes, within, false).await
+}
+
+/// Hands the account's tab a file that replaces one already placed — kept
+/// only when its document uses `path` — and waits up to `within` for its
+/// answer: `{"path", "kept"}`.
+///
+/// # Errors
+///
+/// When the tab gave no answer to act on, and why.
+///
+/// # Panics
+///
+/// If another thread panicked while holding the rooms.
+pub async fn replace_in(
+    rooms: &Rooms,
+    room: &str,
+    path: &str,
+    bytes: &[u8],
+    within: Duration,
+) -> Result<Value, String> {
+    send_file(rooms, room, path, bytes, within, true).await
+}
+
+async fn send_file(
+    rooms: &Rooms,
+    room: &str,
+    path: &str,
+    bytes: &[u8],
+    within: Duration,
+    replace: bool,
+) -> Result<Value, String> {
+    use base64::Engine as _;
+    let (path, data) = (
+        path.to_owned(),
+        base64::engine::general_purpose::STANDARD.encode(bytes),
+    );
+    ask_tab(rooms, room, None, within, move |id| ToTab::Asset {
+        id,
+        path,
+        data,
+        replace,
+    })
+    .await
+}
+
 /// Sends one call down to the tab and waits for its answer.
 async fn hand_to_tab(rooms: &Rooms, room: &str, name: &str, args: Value) -> Result<Value, String> {
     let call = name.to_owned();
@@ -1248,6 +1329,75 @@ mod tests {
             asking.await.unwrap(),
             Ok(json!({"project": "p1", "revision": 4}))
         );
+    }
+
+    /// A file for the tab goes as its own message, its bytes in base64, and
+    /// the tab's answer is what the sender gets back; a tab that does not
+    /// answer frees its slot as a flush does.
+    #[tokio::test]
+    async fn a_file_is_handed_to_the_tab_and_acknowledged() {
+        let rooms = Rooms::default();
+        let (room, mut inbox) = connected(&rooms);
+        let sending = tokio::spawn({
+            let (rooms, room) = (rooms.clone(), room.clone());
+            async move {
+                stage_in(
+                    &rooms,
+                    &room,
+                    "products/p1/model.glb",
+                    b"glTF\x02\x00",
+                    Duration::from_secs(5),
+                )
+                .await
+            }
+        });
+        let sent = inbox.recv().await.expect("the file");
+        assert_eq!(
+            serde_json::to_value(&sent).unwrap(),
+            json!({"type": "asset", "id": 1, "path": "products/p1/model.glb", "data": "Z2xURgIA"})
+        );
+        let answer = rooms
+            .0
+            .lock()
+            .unwrap()
+            .rooms
+            .get_mut(&room)
+            .unwrap()
+            .waiting
+            .remove(&1)
+            .expect("waiting under its id");
+        answer
+            .send(Ok(json!({"path": "products/p1/model.glb"})))
+            .unwrap();
+        assert_eq!(
+            sending.await.unwrap(),
+            Ok(json!({"path": "products/p1/model.glb"}))
+        );
+        // A replacement says so, for the tab to keep only where it is used.
+        let replacing = tokio::spawn({
+            let (rooms, room) = (rooms.clone(), room.clone());
+            async move {
+                replace_in(
+                    &rooms,
+                    &room,
+                    "products/p1/model.glb",
+                    b"glTF",
+                    Duration::from_millis(50),
+                )
+                .await
+            }
+        });
+        assert_eq!(
+            serde_json::to_value(inbox.recv().await.expect("the replacement")).unwrap(),
+            json!({"type": "asset", "id": 2, "path": "products/p1/model.glb", "data": "Z2xURg==", "replace": true})
+        );
+        let _ = replacing.await;
+        let unanswered = stage_in(&rooms, &room, "x.glb", b"", Duration::from_millis(10)).await;
+        assert_eq!(
+            unanswered,
+            Err("the window took longer than 0.01 s to answer".to_owned())
+        );
+        assert_eq!(in_flight(&rooms, &room), 0);
     }
 
     /// A tab that never answers — an editor older than the message — costs

@@ -4373,3 +4373,1552 @@ async fn the_tab_naming_the_project_already_active_keeps_the_engines_copy() {
     );
     assert_eq!(counts(&base, &access).await, counted(4), "the copy is kept");
 }
+
+// ---------------------------------------------------------------- estimate
+
+async fn account_id(state: &AppState, email: &str) -> String {
+    sqlx::query_scalar("select id from accounts where lower(email) = lower($1)")
+        .bind(email)
+        .fetch_one(&state.db)
+        .await
+        .unwrap()
+}
+
+/// A product in an account's library, its fields given as name → value,
+/// as the agent's.
+async fn stock(state: &AppState, account: &str, id: &str, url: &str, kind: &str, fields: Value) {
+    let shop = url.split('/').nth(2).unwrap().trim_start_matches("www.");
+    let fields: serde_json::Map<String, Value> = fields
+        .as_object()
+        .unwrap()
+        .iter()
+        .map(|(name, value)| {
+            (
+                name.clone(),
+                json!({"value": value, "evidence": "agent", "from": "edit_products"}),
+            )
+        })
+        .collect();
+    sqlx::query(
+        "insert into products (id, account_id, shop, market, sku, url, kind, fields)
+         values ($1, $2, $3, 'nl', $1, $4, $5, $6)",
+    )
+    .bind(id)
+    .bind(account)
+    .bind(shop)
+    .bind(url)
+    .bind(kind)
+    .bind(Value::Object(fields))
+    .execute(&state.db)
+    .await
+    .unwrap();
+}
+
+/// The library the estimate tests price from: a tile, a paint, a laminate
+/// without a price, chairs sold in fours.
+async fn stock_library(state: &AppState, account: &str) {
+    stock(
+        state,
+        account,
+        "p-tile",
+        "https://www.praxis.nl/tegel",
+        "finish",
+        json!({"title": "Wandtegel Wit 30x60", "finish_type": "covering", "price": "24.54",
+               "currency": "EUR", "vat_included": true, "sale_unit": "pack", "pack_m2": 1.62}),
+    )
+    .await;
+    stock(
+        state,
+        account,
+        "p-paint",
+        "https://www.gamma.nl/verf",
+        "finish",
+        json!({"title": "Muurverf Wit 2,5 L", "finish_type": "paint", "price": "39.99",
+               "currency": "EUR", "vat_included": true, "sale_unit": "pack",
+               "pack_litres": 2.5, "spread_m2_per_litre": 10}),
+    )
+    .await;
+    stock(
+        state,
+        account,
+        "p-laminate",
+        "https://www.praxis.nl/laminaat",
+        "finish",
+        json!({"title": "Laminaat Eiken", "finish_type": "covering", "currency": "EUR",
+               "sale_unit": "pack", "pack_m2": 2.22}),
+    )
+    .await;
+    stock(
+        state,
+        account,
+        "p-chairs",
+        "https://www.ikea.com/nl/nl/p/stoel",
+        "furniture",
+        json!({"title": "TEODORES stoel, 4 st", "price": "79.96", "currency": "EUR",
+               "vat_included": true, "sale_unit": "piece", "pack_pieces": 4}),
+    )
+    .await;
+}
+
+/// A bathroom: wall w1 (400 cm, 250 high) with room r2 (400 × 300 cm) on its
+/// right; tile on w1's room side up to 120 cm with 10 % waste, paint on the
+/// ceiling in two coats, laminate on the floor with 5 % waste, p-other on
+/// w1's outer side, and five chairs of p-chairs.
+fn bathroom() -> Vec<u8> {
+    use newera_core::finishes::{Band, FinishAssignment};
+    use newera_core::{Furniture, FurnitureId, Point2, Room, RoomId, Wall, WallId};
+    let mut home = newera_core::Home::default();
+    home.walls.push(Wall::new(
+        WallId(1),
+        Point2::new(0.0, 0.0),
+        Point2::new(400.0, 0.0),
+    ));
+    home.rooms.push(Room::new(
+        RoomId(2),
+        "Badkamer",
+        vec![
+            Point2::new(0.0, 0.0),
+            Point2::new(400.0, 0.0),
+            Point2::new(400.0, 300.0),
+            Point2::new(0.0, 300.0),
+        ],
+    ));
+    let assign = |surface: &str, product: &str, band, coats, waste| FinishAssignment {
+        surface: surface.parse().unwrap(),
+        product: product.to_owned(),
+        band,
+        coats,
+        waste,
+    };
+    home.finish_assignments = vec![
+        assign(
+            "w1:right",
+            "p-tile",
+            Some(Band {
+                from: 0.0,
+                to: 120.0,
+            }),
+            None,
+            Some(10.0),
+        ),
+        assign("r2:ceiling", "p-paint", None, Some(2), None),
+        assign("r2:floor", "p-laminate", None, None, Some(5.0)),
+        assign("w1:left", "p-other", None, None, None),
+    ];
+    for n in 0..5u32 {
+        let mut chair = Furniture {
+            id: FurnitureId(10 + u64::from(n)),
+            catalog: "chair".into(),
+            position: Point2::new(100.0 + 50.0 * f64::from(n), 150.0),
+            ..Furniture::default()
+        };
+        chair.info.product = Some("p-chairs".to_owned());
+        home.furniture.push(chair);
+    }
+    newera_core::to_project_bytes(&newera_core::Document::new(home))
+}
+
+/// A project of `account`'s, made its active one.
+async fn active_project(state: &AppState, account: &str, name: &str, data: Vec<u8>) -> String {
+    let id = secret::id();
+    sqlx::query(
+        "insert into projects (id, account_id, name, data, size) values ($1, $2, $3, $4, $5)",
+    )
+    .bind(&id)
+    .bind(account)
+    .bind(name)
+    .bind(&data)
+    .bind(i32::try_from(data.len()).unwrap())
+    .execute(&state.db)
+    .await
+    .unwrap();
+    sqlx::query(
+        "insert into active_projects (account_id, project_id) values ($1, $2)
+         on conflict (account_id) do update set project_id = excluded.project_id",
+    )
+    .bind(account)
+    .bind(&id)
+    .execute(&state.db)
+    .await
+    .unwrap();
+    id
+}
+
+/// The bathroom's lines, priced from `stock_library`.
+fn bathroom_lines() -> [Value; 5] {
+    [
+        json!({
+            "kind": "covering", "product": "p-laminate", "shop": "praxis.nl",
+            "title": "Laminaat Eiken", "url": "https://www.praxis.nl/laminaat",
+            "quantity": "6", "unit": "pack", "need": ["12.6", "m2"],
+            "unit_price": null, "currency": "EUR", "total": null,
+            "rooms": ["r2"], "surfaces": ["r2:floor"],
+            "notes": ["no price: edit_products sets it"],
+        }),
+        json!({
+            "kind": "unknown", "product": "p-other", "shop": null, "title": null,
+            "quantity": "10", "unit": "m2", "need": ["10", "m2"],
+            "unit_price": null, "currency": null, "total": null,
+            "surfaces": ["w1:left"],
+            "notes": ["product p-other is not in this account's library (products lists it)"],
+        }),
+        // 12 m² twice at 10 m² a litre: 2.4 L, one can.
+        json!({
+            "kind": "paint", "product": "p-paint", "shop": "gamma.nl",
+            "title": "Muurverf Wit 2,5 L", "url": "https://www.gamma.nl/verf",
+            "quantity": "1", "unit": "pack", "need": ["2.4", "litre"],
+            "unit_price": "39.99", "currency": "EUR", "vat_included": true, "total": "39.99",
+            "rooms": ["r2"], "surfaces": ["r2:ceiling"],
+        }),
+        // 4.8 m² and 10 %: 5.28 m², ⌈3.26⌉ packs of 1.62.
+        json!({
+            "kind": "covering", "product": "p-tile", "shop": "praxis.nl",
+            "title": "Wandtegel Wit 30x60", "url": "https://www.praxis.nl/tegel",
+            "quantity": "4", "unit": "pack", "need": ["5.28", "m2"],
+            "unit_price": "24.54", "currency": "EUR", "vat_included": true, "total": "98.16",
+            "rooms": ["r2"], "surfaces": ["w1:right"],
+        }),
+        json!({
+            "kind": "furniture", "product": "p-chairs", "shop": "ikea.com",
+            "title": "TEODORES stoel, 4 st", "url": "https://www.ikea.com/nl/nl/p/stoel",
+            "quantity": "2", "unit": "pack", "need": ["5", "piece"],
+            "unit_price": "79.96", "currency": "EUR", "vat_included": true, "total": "159.92",
+            "rooms": ["r2"], "pieces": ["f10", "f11", "f12", "f13", "f14"],
+            "notes": ["sold in packs of 4 pieces"],
+        }),
+    ]
+}
+
+fn unpriced_sum() -> Value {
+    json!({"currency": null, "vat": null, "total": null, "complete": false})
+}
+
+/// Without a tab, the engine measures the active project, and the estimate
+/// prices it from the account's library: whole packs once per product,
+/// waste and coats in, an unpriced line making its totals incomplete, a
+/// product of another account's not priced from it.
+#[tokio::test]
+async fn an_estimate_prices_what_the_project_buys() {
+    let Some((base, state)) = service().await else {
+        return;
+    };
+    let (_, access, _) = credentials(&base, &state, "a@example.com").await;
+    let account = account_id(&state, "a@example.com").await;
+    stock_library(&state, &account).await;
+    // Another account's product of the id the bathroom names.
+    let (_, other_access, _) = credentials(&base, &state, "b@example.com").await;
+    let other = account_id(&state, "b@example.com").await;
+    stock(
+        &state,
+        &other,
+        "p-other",
+        "https://www.praxis.nl/ander",
+        "finish",
+        json!({"title": "Ander", "price": "1.00", "currency": "EUR", "sale_unit": "m2"}),
+    )
+    .await;
+    let project = active_project(&state, &account, "Badkamer", bathroom()).await;
+
+    let [laminate, other_line, paint, tile, chairs] = bathroom_lines();
+    let answer = tool(&base, &access, "estimate", json!({})).await;
+    assert_eq!(
+        fields_of(&answer),
+        json!({
+            "project": {"id": project, "name": "Badkamer"},
+            "from": "server",
+            "group_by": "shop",
+            "groups": [
+                {"name": "praxis.nl", "lines": [laminate, tile],
+                 "totals": [unpriced_sum(), {"currency": "EUR", "vat": "included", "total": "98.16", "complete": false}]},
+                {"name": "no shop", "lines": [other_line], "totals": [unpriced_sum()]},
+                {"name": "gamma.nl", "lines": [paint],
+                 "totals": [{"currency": "EUR", "vat": "included", "total": "39.99", "complete": true}]},
+                {"name": "ikea.com", "lines": [chairs],
+                 "totals": [{"currency": "EUR", "vat": "included", "total": "159.92", "complete": true}]},
+            ],
+            "totals": [
+                {"shop": null, "currency": null, "vat": null, "total": null, "complete": false},
+                {"shop": "gamma.nl", "currency": "EUR", "vat": "included", "total": "39.99", "complete": true},
+                {"shop": "ikea.com", "currency": "EUR", "vat": "included", "total": "159.92", "complete": true},
+                {"shop": "praxis.nl", "currency": null, "vat": null, "total": null, "complete": false},
+                {"shop": "praxis.nl", "currency": "EUR", "vat": "included", "total": "98.16", "complete": false},
+            ],
+            "by_currency": [
+                unpriced_sum(),
+                {"currency": "EUR", "vat": "included", "total": "298.07", "complete": false},
+            ],
+            "complete": false,
+            "saved": [],
+        })
+    );
+    // The other account's estimate is of its own project, with nothing of
+    // this one's.
+    let theirs = fields_of(&tool(&base, &other_access, "estimate", json!({})).await);
+    assert_eq!(
+        (
+            &theirs["groups"],
+            &theirs["by_currency"],
+            &theirs["complete"]
+        ),
+        (&json!([]), &json!([]), &json!(true))
+    );
+    assert_ne!(theirs["project"]["id"], json!(project));
+    // By room and by kind, the same lines.
+    let names = |answer: &Value| -> Vec<String> {
+        fields_of(answer)["groups"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|g| g["name"].as_str().unwrap().to_owned())
+            .collect()
+    };
+    assert_eq!(
+        names(&tool(&base, &access, "estimate", json!({"group_by": "room"})).await),
+        ["r2", "no room"]
+    );
+    assert_eq!(
+        names(&tool(&base, &access, "estimate", json!({"group_by": "kind"})).await),
+        ["covering", "unknown", "paint", "furniture"]
+    );
+    let refused = tool(&base, &access, "estimate", json!({"group_by": "floor"})).await;
+    assert_eq!(refused["isError"], true);
+    assert_eq!(
+        refused["content"][0]["text"],
+        "group_by is shop, room or kind, not floor"
+    );
+}
+
+/// Lines added by hand join the estimate; a saved estimate is what it was
+/// when saved, whatever changes after; its sheet downloads as CSV; and none
+/// of it reaches another account.
+#[tokio::test]
+async fn extra_lines_and_saved_estimates_stay_with_their_project() {
+    let Some((base, state)) = service().await else {
+        return;
+    };
+    let (_, access, _) = credentials(&base, &state, "a@example.com").await;
+    let account = account_id(&state, "a@example.com").await;
+    stock_library(&state, &account).await;
+    let project = active_project(&state, &account, "Badkamer", bathroom()).await;
+
+    let added = tool(
+        &base,
+        &access,
+        "edit_estimate",
+        json!({"action": "add_line", "title": "Tiling labour", "quantity": 6, "unit": "hour", "vat_included": false,
+               "unit_price": "45.00", "shop": "Tegelzetter Jan"}),
+    )
+    .await;
+    let line = fields_of(&added)["line"].clone();
+    let line_id = line["line"].as_str().unwrap().to_owned();
+    let labour = json!({
+        "kind": "extra", "line": line_id, "shop": "Tegelzetter Jan", "title": "Tiling labour",
+        "quantity": "6", "unit": "hour", "unit_price": "45.00", "currency": "EUR",
+        "vat_included": false, "total": "270.00",
+    });
+    assert_eq!(line, labour);
+    let refused = tool(
+        &base,
+        &access,
+        "edit_estimate",
+        json!({"action": "add_line", "title": "Delivery", "unit_price": "x"}),
+    )
+    .await;
+    assert_eq!(
+        refused["content"][0]["text"],
+        "edit_estimate action=add_line: unit_price is the price of one, an amount of 0 or more like \"45.00\""
+    );
+    let now = fields_of(&tool(&base, &access, "estimate", json!({})).await);
+    assert_eq!(
+        now["groups"][4],
+        json!({"name": "Tegelzetter Jan", "lines": [labour],
+               "totals": [{"currency": "EUR", "vat": "excluded", "total": "270.00", "complete": true}]})
+    );
+    assert_eq!(
+        now["by_currency"],
+        json!([
+            unpriced_sum(),
+            {"currency": "EUR", "vat": "excluded", "total": "270.00", "complete": false},
+            {"currency": "EUR", "vat": "included", "total": "298.07", "complete": false},
+        ])
+    );
+
+    let saved = fields_of(
+        &tool(
+            &base,
+            &access,
+            "edit_estimate",
+            json!({"action": "save", "name": "Offerte 1"}),
+        )
+        .await,
+    );
+    let saved_id = saved["saved"]["id"].as_str().unwrap().to_owned();
+    let at = saved["saved"]["saved"].clone();
+    assert_eq!(
+        saved,
+        json!({
+            "saved": {"id": saved_id, "name": "Offerte 1", "saved": at, "project": project},
+            "by_currency": now["by_currency"],
+            "complete": false,
+        })
+    );
+    let again = tool(
+        &base,
+        &access,
+        "edit_estimate",
+        json!({"action": "save", "name": "offerte 1"}),
+    )
+    .await;
+    assert_eq!(
+        again,
+        json!({"content": [{"type": "text", "text": "this project already has a saved estimate named offerte 1: a saved estimate never changes — choose another name, or remove_saved that one first"}],
+               "isError": true})
+    );
+
+    // The tile's price goes up and the labour goes: the estimate changes,
+    // the saved one does not.
+    sqlx::query(
+        "update products set fields = jsonb_set(fields, '{price,value}', '\"30.00\"') where id = 'p-tile'",
+    )
+    .execute(&state.db)
+    .await
+    .unwrap();
+    let removed = tool(
+        &base,
+        &access,
+        "edit_estimate",
+        json!({"action": "remove_line", "line": line_id}),
+    )
+    .await;
+    assert_eq!(fields_of(&removed), json!({"removed": true, "id": line_id}));
+    let changed = fields_of(&tool(&base, &access, "estimate", json!({})).await);
+    assert_eq!(
+        changed["by_currency"],
+        json!([unpriced_sum(), {"currency": "EUR", "vat": "included", "total": "319.91", "complete": false}])
+    );
+    assert_eq!(
+        changed["saved"],
+        json!([[saved_id, "Offerte 1", at]]),
+        "the estimate lists the saved one"
+    );
+    let kept = fields_of(&tool(&base, &access, "estimate", json!({"saved": "Offerte 1"})).await);
+    let mut was = now.clone();
+    was.as_object_mut().unwrap().remove("saved");
+    was["saved_as"] = json!({"id": saved_id, "name": "Offerte 1", "saved": at, "project": project});
+    assert_eq!(kept, was, "a saved estimate is what it was");
+    assert_eq!(
+        fields_of(&tool(&base, &access, "estimate", json!({"saved": saved_id})).await),
+        was
+    );
+
+    // Its sheet, behind a link.
+    let sheet = fields_of(
+        &tool(
+            &base,
+            &access,
+            "estimate",
+            json!({"saved": saved_id, "format": "csv"}),
+        )
+        .await,
+    );
+    let link = sheet["csv"].as_str().unwrap().to_owned();
+    assert_eq!(
+        sheet,
+        json!({
+            "csv": link,
+            "project": {"id": project, "name": "Badkamer"},
+            "by_currency": now["by_currency"],
+            "complete": false,
+            "saved_as": was["saved_as"],
+        })
+    );
+    assert!(link.starts_with(&format!("{base}/files/")), "{link}");
+    let got = client().get(&link).send().await.unwrap();
+    assert_eq!(got.status(), 200);
+    assert_eq!(got.headers()["content-type"], "text/csv");
+    assert_eq!(
+        got.headers()["content-disposition"],
+        "attachment; filename=\"Badkamer estimate.csv\"; filename*=UTF-8''Badkamer%20estimate.csv"
+    );
+    assert_eq!(
+        got.text().await.unwrap(),
+        "group,kind,shop,title,url,quantity,unit,packs,unit_price,currency,vat,total,rooms,surfaces,notes\r\n\
+         praxis.nl,covering,praxis.nl,Laminaat Eiken,https://www.praxis.nl/laminaat,6,pack,,,EUR,unknown,unpriced,r2,r2:floor,no price: edit_products sets it\r\n\
+         praxis.nl,covering,praxis.nl,Wandtegel Wit 30x60,https://www.praxis.nl/tegel,4,pack,,24.54,EUR,included,98.16,r2,w1:right,\r\n\
+         no shop,unknown,,p-other,,10,m2,,,,unknown,unpriced,,w1:left,product p-other is not in this account's library (products lists it)\r\n\
+         gamma.nl,paint,gamma.nl,\"Muurverf Wit 2,5 L\",https://www.gamma.nl/verf,1,pack,,39.99,EUR,included,39.99,r2,r2:ceiling,\r\n\
+         ikea.com,furniture,ikea.com,\"TEODORES stoel, 4 st\",https://www.ikea.com/nl/nl/p/stoel,2,pack,,79.96,EUR,included,159.92,r2,,sold in packs of 4 pieces\r\n\
+         Tegelzetter Jan,extra,Tegelzetter Jan,Tiling labour,,6,hour,,45.00,EUR,excluded,270.00,,,\r\n\
+         total,,,,,,,,,,,unpriced,,,\r\n\
+         total,,,,,,,,,EUR,excluded,270.00 (incomplete),,,\r\n\
+         total,,,,,,,,,EUR,included,298.07 (incomplete),,,\r\n"
+    );
+
+    // Another account, with a project of its own, reaches none of it.
+    let (_, other_access, _) = credentials(&base, &state, "b@example.com").await;
+    let theirs = fields_of(&tool(&base, &other_access, "estimate", json!({})).await);
+    assert_eq!(theirs["groups"], json!([]));
+    let kept_line = fields_of(
+        &tool(
+            &base,
+            &access,
+            "edit_estimate",
+            json!({"action": "add_line", "title": "Delivery", "unit_price": 35}),
+        )
+        .await,
+    )["line"]["line"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    for (args, why) in [
+        (
+            json!({"saved": saved_id}),
+            format!(
+                "no saved estimate {saved_id} (estimate lists the project's saved ones under saved)"
+            ),
+        ),
+        (
+            json!({"saved": "Offerte 1"}),
+            "no saved estimate Offerte 1 (estimate lists the project's saved ones under saved)"
+                .to_owned(),
+        ),
+    ] {
+        let answer = tool(&base, &other_access, "estimate", args).await;
+        assert_eq!(answer["content"][0]["text"], why);
+    }
+    let answer = tool(
+        &base,
+        &other_access,
+        "edit_estimate",
+        json!({"action": "remove_line", "line": kept_line}),
+    )
+    .await;
+    assert_eq!(
+        answer["content"][0]["text"],
+        format!(
+            "no line {kept_line} added to this project's estimate (estimate lists them, with their line ids)"
+        )
+    );
+    let answer = tool(
+        &base,
+        &other_access,
+        "edit_estimate",
+        json!({"action": "remove_saved", "saved": saved_id}),
+    )
+    .await;
+    assert_eq!(answer["isError"], true);
+
+    // Removed, it is gone.
+    let gone = fields_of(
+        &tool(
+            &base,
+            &access,
+            "edit_estimate",
+            json!({"action": "remove_saved", "saved": "Offerte 1"}),
+        )
+        .await,
+    );
+    assert_eq!(gone, json!({"removed": true, "saved": was["saved_as"]}));
+    let answer = tool(&base, &access, "estimate", json!({"saved": saved_id})).await;
+    assert_eq!(answer["isError"], true);
+    let delivery = fields_of(&tool(&base, &access, "estimate", json!({})).await);
+    // A line with no shop joins the other lines of none.
+    assert_eq!(
+        delivery["groups"][1]["lines"][1]["title"], "Delivery",
+        "the other account removed nothing"
+    );
+}
+
+/// An estimate asked for while a tab holds the room: the tab is asked to
+/// save and say which project it shows, answering with `flush` (`None`:
+/// never); answers the estimate.
+async fn estimate_with_tab(
+    base: &str,
+    access: &str,
+    socket: &mut Tab,
+    args: Value,
+    flush: Value,
+) -> tokio::task::JoinHandle<Value> {
+    let asking = tokio::spawn({
+        let (base, access, tool_name) = (
+            base.to_owned(),
+            access.to_owned(),
+            if args.get("action").is_some() {
+                "edit_estimate"
+            } else {
+                "estimate"
+            },
+        );
+        async move { tool(&base, &access, tool_name, args).await }
+    });
+    let asked = to_tab(socket).await;
+    assert_eq!(asked["type"], "flush", "{asked}");
+    let mut flush = flush;
+    flush["id"] = asked["id"].clone();
+    answer_tab(socket, flush).await;
+    asking
+}
+
+/// While a tab holds the room and shows the active project, the takeoff is
+/// the tab's: it is asked for it like any relayed call, after it saved.
+/// When it shows another project, or one not on the server, or does not
+/// say, the estimate is of the active project as stored, saying so — and a
+/// saved estimate is too.
+#[tokio::test]
+async fn with_a_tab_open_the_estimate_is_of_what_it_shows() {
+    let Some((base, state)) = service().await else {
+        return;
+    };
+    let (cookie, access, _) = credentials(&base, &state, "a@example.com").await;
+    let account = account_id(&state, "a@example.com").await;
+    stock_library(&state, &account).await;
+    let attic = active_project(&state, &account, "Zolder", empty_project()).await;
+    let project = active_project(&state, &account, "Keuken", bathroom()).await;
+    let mut socket = claimed_tab(&base, &cookie).await;
+    let asking = estimate_with_tab(
+        &base,
+        &access,
+        &mut socket,
+        json!({}),
+        json!({"type": "result", "ok": true, "result": {"project": project, "revision": 0}}),
+    )
+    .await;
+    let asked = to_tab(&mut socket).await;
+    assert_eq!(
+        asked,
+        json!({"type": "call", "id": asked["id"], "name": "takeoff", "args": {}})
+    );
+    let takeoff = json!({
+        "finishes": [{
+            "product": "p-tile", "net_m2": 3.24, "gross_m2": 3.24, "openings_m2": 0.0,
+            "surfaces": [{"surface": "w7:left", "room": "r8", "gross_m2": 3.24,
+                          "openings_m2": 0.0, "net_m2": 3.24, "spans_cm": [[270.0, 120.0]]}],
+        }],
+        "furniture": [],
+    });
+    answer_tab(
+        &mut socket,
+        json!({"type": "result", "id": asked["id"], "ok": true,
+               "result": {"content": [{"type": "text", "text": takeoff.to_string()}]}}),
+    )
+    .await;
+    let answer = asking.await.unwrap();
+    let tile = json!({
+        "kind": "covering", "product": "p-tile", "shop": "praxis.nl",
+        "title": "Wandtegel Wit 30x60", "url": "https://www.praxis.nl/tegel",
+        "quantity": "2", "unit": "pack", "need": ["3.24", "m2"],
+        "unit_price": "24.54", "currency": "EUR", "vat_included": true, "total": "49.08",
+        "rooms": ["r8"], "surfaces": ["w7:left"],
+    });
+    let sum = json!({"currency": "EUR", "vat": "included", "total": "49.08", "complete": true});
+    assert_eq!(
+        fields_of(&answer),
+        json!({
+            "project": {"id": project, "name": "Keuken"},
+            "from": "tab",
+            "group_by": "shop",
+            "groups": [{"name": "praxis.nl", "lines": [tile], "totals": [sum]}],
+            "totals": [{"shop": "praxis.nl", "currency": "EUR", "vat": "included", "total": "49.08", "complete": true}],
+            "by_currency": [sum],
+            "complete": true,
+            "saved": [],
+        })
+    );
+    tab_left_alone(&mut socket).await;
+
+    // Not the active project: the stored one is priced, and the tab is
+    // asked for nothing more.
+    let stored = json!([
+        unpriced_sum(),
+        {"currency": "EUR", "vat": "included", "total": "298.07", "complete": false},
+    ]);
+    let elsewhere = "This estimate is of the active project as last saved; the editor tab shows another project, Zolder, which is not priced here. Reloading the editor tab makes the project it shows the active one; then ask again.";
+    for (flush, note) in [
+        (
+            json!({"type": "result", "ok": true, "result": {"project": attic, "revision": 0}}),
+            elsewhere.to_owned(),
+        ),
+        (
+            json!({"type": "result", "ok": true, "result": {"project": "not-theirs", "revision": 0}}),
+            "This estimate is of the active project as last saved; the editor tab shows a project this account does not have (not-theirs), which is not priced here. Reloading the editor tab makes the project it shows the active one; then ask again.".to_owned(),
+        ),
+        (
+            json!({"type": "result", "ok": true, "result": {"project": null}}),
+            "This estimate is of the active project as last saved; the editor tab shows a project that is not saved on the server, which is not priced here.".to_owned(),
+        ),
+        (
+            json!({"type": "result", "ok": false, "error": "the service said 413"}),
+            "The editor tab did not say which project it shows (the service said 413): this estimate is of the active project as last saved, and edits made in the tab since may be missing.".to_owned(),
+        ),
+    ] {
+        let answer = estimate_with_tab(&base, &access, &mut socket, json!({}), flush)
+            .await
+            .await
+            .unwrap();
+        let got = fields_of(&answer);
+        assert_eq!(
+            (&got["from"], &got["project"]["id"], &got["by_currency"], &got["note"]),
+            (&json!("server"), &json!(project), &stored, &json!(note))
+        );
+        tab_left_alone(&mut socket).await;
+    }
+
+    // A saved estimate is of the project it is filed under.
+    let saved = estimate_with_tab(
+        &base,
+        &access,
+        &mut socket,
+        json!({"action": "save", "name": "Keuken offerte"}),
+        json!({"type": "result", "ok": true, "result": {"project": attic, "revision": 0}}),
+    )
+    .await
+    .await
+    .unwrap();
+    let saved = fields_of(&saved);
+    assert_eq!(
+        (
+            &saved["saved"]["project"],
+            &saved["by_currency"],
+            &saved["note"]
+        ),
+        (&json!(project), &stored, &json!(elsewhere))
+    );
+    tab_left_alone(&mut socket).await;
+
+    // A tab that shows the project but cannot measure says why.
+    let asking = estimate_with_tab(
+        &base,
+        &access,
+        &mut socket,
+        json!({}),
+        json!({"type": "result", "ok": true, "result": {"project": project, "revision": 0}}),
+    )
+    .await;
+    let asked = to_tab(&mut socket).await;
+    answer_tab(
+        &mut socket,
+        json!({"type": "result", "id": asked["id"], "ok": false, "error": "the tab is busy"}),
+    )
+    .await;
+    let answer = asking.await.unwrap();
+    assert_eq!(
+        answer,
+        json!({"content": [{"type": "text",
+                            "text": "the project's quantities could not be measured (the tab is busy)"}],
+               "isError": true})
+    );
+    hang_up(&state, socket, "a@example.com").await;
+}
+
+// ---------------------------------------------------------- product models
+
+/// A shop's file server for the models: a GLB, one over the limit, a text
+/// file, a redirect. Answers its base address.
+async fn model_server() -> String {
+    use axum::http::{StatusCode, header};
+    use axum::response::IntoResponse;
+    let glb = newera_cloud::models::placeholder_glb(&newera_cloud::models::Look {
+        catalog: Some("sofa-3"),
+        size: [200.0, 90.0, 80.0],
+        colour: Some([10, 20, 30]),
+    });
+    let mut big = b"glTF".to_vec();
+    big.resize(newera_cloud::models::MODEL_LIMIT + 1, 0);
+    let app = axum::Router::new()
+        .route(
+            "/sofa.glb",
+            axum::routing::get(move || async move { glb.clone() }),
+        )
+        .route(
+            "/big.glb",
+            axum::routing::get(move || async move { big.clone() }),
+        )
+        .route(
+            "/notes.glb",
+            axum::routing::get(|| async { "solid cube\nendsolid\n" }),
+        )
+        .route(
+            "/moved.glb",
+            axum::routing::get(|| async {
+                (StatusCode::FOUND, [(header::LOCATION, "/sofa.glb")]).into_response()
+            }),
+        );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    base
+}
+
+fn said_json(answer: &Value) -> Value {
+    assert_eq!(answer["isError"], false, "{answer}");
+    serde_json::from_str(answer["content"][0]["text"].as_str().unwrap()).unwrap()
+}
+
+fn refusal(text: &str) -> Value {
+    json!({"content": [{"type": "text", "text": text}], "isError": true})
+}
+
+/// A sofa in the account's library, 200×90×80 cm, with no model.
+async fn stock_sofa(state: &AppState, email: &str, id: &str) {
+    let account = account_id(state, email).await;
+    stock(
+        state,
+        &account,
+        id,
+        &format!("https://www.ikea.com/nl/nl/p/{id}/"),
+        "furniture",
+        json!({"title": "Sofa", "product_type": "3-zitsbank / Sofa", "colour_hex": "#eeebe1",
+               "width_cm": 200.0, "depth_cm": 90.0, "height_cm": 80.0}),
+    )
+    .await;
+}
+
+/// What the account's stored project holds: its pieces, and the names of
+/// the files inside it.
+async fn kept_project(
+    state: &AppState,
+    project: &str,
+) -> (Vec<newera_core::Furniture>, Vec<String>) {
+    let (_, bytes) = stored(state, project).await;
+    let (project, files) = newera_core::project_from_bytes(&bytes).unwrap();
+    let pieces = project.variants[0].1.furniture.clone();
+    (pieces, files.into_iter().map(|(name, _)| name).collect())
+}
+
+/// `attach_model` keeps a GLB the editor reads, from the link given, and
+/// says why for anything else; the product shows what it has.
+#[tokio::test]
+async fn a_model_is_attached_from_a_link_only_when_it_is_one() {
+    let Some((base, state)) = service().await else {
+        return;
+    };
+    let files = model_server().await;
+    state.links.allow_for_tests("127.0.0.1".parse().unwrap());
+    let (_, access, _) = credentials(&base, &state, "a@example.com").await;
+    stock_sofa(&state, "a@example.com", "p1").await;
+    let attach = |url: String| {
+        let (base, access) = (base.clone(), access.clone());
+        async move {
+            tool(
+                &base,
+                &access,
+                "edit_products",
+                json!({"id": "p1", "action": "attach_model", "url": url, "generator": "TRELLIS"}),
+            )
+            .await
+        }
+    };
+    assert_eq!(
+        attach(format!("{files}/big.glb")).await,
+        refusal("the model is 21 MB, over the 20 MB a product's model may be")
+    );
+    assert_eq!(
+        attach(format!("{files}/notes.glb")).await,
+        refusal(&format!(
+            "{files}/notes.glb: not a GLB: a binary glTF file starts with `glTF`"
+        ))
+    );
+    assert_eq!(
+        attach(format!("{files}/moved.glb")).await,
+        refusal(&format!(
+            "{files}/moved.glb redirects to /sofa.glb: give the link it redirects to"
+        ))
+    );
+    assert_eq!(
+        attach("ftp://example.com/a.glb".to_owned()).await,
+        refusal("ftp://example.com/a.glb: a model is fetched over http or https")
+    );
+    let none: i64 = sqlx::query_scalar("select count(*) from product_assets")
+        .fetch_one(&state.db)
+        .await
+        .unwrap();
+    assert_eq!(none, 0, "nothing kept from a refused link");
+
+    let shown = said_json(&attach(format!("{files}/sofa.glb")).await);
+    let (size, kept): (i32, Vec<u8>) =
+        sqlx::query_as("select size, data from product_assets where product_id = 'p1'")
+            .fetch_one(&state.db)
+            .await
+            .unwrap();
+    assert_eq!(usize::try_from(size).unwrap(), kept.len());
+    assert!(kept.starts_with(b"glTF"));
+    let row = &shown["files"][0];
+    assert_eq!(
+        [&row[0], &row[1], &row[2], &row[3]],
+        [
+            &json!("model"),
+            &json!("generated"),
+            &json!("TRELLIS"),
+            &json!(size)
+        ]
+    );
+    assert_eq!(shown["files"].as_array().unwrap().len(), 1);
+    // Without a generator the file is the shop's, and it replaces the one
+    // kept.
+    let again = tool(
+        &base,
+        &access,
+        "edit_products",
+        json!({"id": "p1", "action": "attach_model", "url": format!("{files}/sofa.glb")}),
+    )
+    .await;
+    let again = said_json(&again);
+    assert_eq!(again["files"].as_array().unwrap().len(), 1);
+    assert_eq!(again["files"][0][1], "shop");
+    assert_eq!(again["files"][0][2], Value::Null);
+}
+
+/// A product placed with no tab open is drawn with its model, at the
+/// shop's size, and carries its id; the model is saved inside the project,
+/// so a copy opened afresh from the database draws it too.
+#[tokio::test]
+async fn a_product_placed_on_the_server_is_saved_with_its_model() {
+    let Some((base, state)) = service().await else {
+        return;
+    };
+    let files = model_server().await;
+    state.links.allow_for_tests("127.0.0.1".parse().unwrap());
+    let (_, access, project) = drawn_project(&base, &state, "a@example.com").await;
+    stock_sofa(&state, "a@example.com", "p1").await;
+    let attached = tool(
+        &base,
+        &access,
+        "edit_products",
+        json!({"id": "p1", "action": "attach_model", "url": format!("{files}/sofa.glb")}),
+    )
+    .await;
+    assert_eq!(attached["isError"], false, "{attached}");
+    let placed = tool(
+        &base,
+        &access,
+        "place",
+        json!({"items": [{"model": "product:p1", "at": [200, 150]}]}),
+    )
+    .await;
+    assert_eq!(placed["isError"], false, "{placed}");
+    assert!(
+        !placed["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("placeholder"),
+        "a real model is no placeholder: {placed}"
+    );
+    let (pieces, bundled) = kept_project(&state, &project).await;
+    assert_eq!(pieces.len(), 1);
+    let sofa = &pieces[0];
+    assert_eq!(sofa.info.product.as_deref(), Some("p1"));
+    assert_eq!(sofa.model.as_deref(), Some("products/p1/model.glb"));
+    assert_eq!(
+        [sofa.width, sofa.depth, sofa.height],
+        [200.0, 90.0, 80.0],
+        "the shop's exact size"
+    );
+    assert!(
+        bundled.contains(&"products/p1/model.glb".to_owned()),
+        "{bundled:?}"
+    );
+    // Every copy gone: the next call opens the project from what is stored.
+    state.engine.sweep(std::time::Duration::ZERO);
+    let inspected = tool(&base, &access, "model", json!({"id": sofa.id.to_string()})).await;
+    assert_eq!(inspected["isError"], false, "{inspected}");
+}
+
+/// With no model, a product that has its size is drawn as a placeholder
+/// built from it, which the answer says, and which is kept until what it
+/// was built from changes; one without a size is refused, with what to do.
+#[tokio::test]
+async fn a_product_without_a_model_is_placed_as_a_placeholder() {
+    let Some((base, state)) = service().await else {
+        return;
+    };
+    let (_, access, project) = drawn_project(&base, &state, "a@example.com").await;
+    stock_sofa(&state, "a@example.com", "p1").await;
+    let placed = tool(
+        &base,
+        &access,
+        "place",
+        json!({"items": [{"model": "product:p1", "at": [200, 150]}, {"model": "product:p1", "at": [200, 250]}]}),
+    )
+    .await;
+    assert_eq!(placed["isError"], false, "{placed}");
+    let note = "p1 has no 3D model yet: it is drawn as a placeholder (sofa-3), a generated approximation stretched to the piece's box. edit_products action=attach_model gives it a model, which replaces the placeholder at once in the project open now (the editor tab, or the server's copy) and in any other project the next time the product is placed there";
+    let content = placed["content"].as_array().unwrap();
+    assert_eq!(
+        content.last().unwrap(),
+        &json!({"type": "text", "text": note})
+    );
+    assert_eq!(
+        content.iter().filter(|c| c["text"] == note).count(),
+        1,
+        "said once for the product"
+    );
+    assert_eq!(placed["structuredContent"]["note"], note);
+    let kept: (String, Option<String>) = sqlx::query_as(
+        "select source, basis from product_assets where product_id = 'p1' and kind = 'model'",
+    )
+    .fetch_one(&state.db)
+    .await
+    .unwrap();
+    assert_eq!(
+        kept,
+        (
+            "placeholder".to_owned(),
+            Some("sofa-3 200x90x80 #eeebe1".to_owned())
+        )
+    );
+    let (pieces, bundled) = kept_project(&state, &project).await;
+    assert_eq!(pieces.len(), 2);
+    assert_eq!(
+        pieces
+            .iter()
+            .map(|p| (p.info.product.clone(), [p.width, p.depth, p.height]))
+            .collect::<Vec<_>>(),
+        vec![(Some("p1".to_owned()), [200.0, 90.0, 80.0]); 2]
+    );
+    assert!(bundled.contains(&"products/p1/model.glb".to_owned()));
+    // The agent corrects the height: the next piece is placed at it, with
+    // the same placeholder.
+    let set = tool(
+        &base,
+        &access,
+        "edit_products",
+        json!({"id": "p1", "action": "set", "fields": {"height_cm": 85}}),
+    )
+    .await;
+    assert_eq!(set["isError"], false, "{set}");
+    let again = tool(
+        &base,
+        &access,
+        "place",
+        json!({"items": [{"model": "product:p1", "at": [300, 150]}]}),
+    )
+    .await;
+    assert_eq!(again["isError"], false, "{again}");
+    let basis: String =
+        sqlx::query_scalar("select basis from product_assets where product_id = 'p1'")
+            .fetch_one(&state.db)
+            .await
+            .unwrap();
+    assert_eq!(
+        basis, "sofa-3 200x90x80 #eeebe1",
+        "the file under the pieces placed with it stays"
+    );
+    let (pieces, _) = kept_project(&state, &project).await;
+    assert_eq!(
+        pieces[2].height, 85.0,
+        "the new piece is the shop's size now"
+    );
+
+    let account = account_id(&state, "a@example.com").await;
+    stock(
+        &state,
+        &account,
+        "p2",
+        "https://www.ikea.com/nl/nl/p/p2/",
+        "furniture",
+        json!({"title": "Lamp"}),
+    )
+    .await;
+    assert_eq!(
+        tool(
+            &base,
+            &access,
+            "place",
+            json!({"items": [{"model": "product:p2", "at": [10, 10]}]})
+        )
+        .await,
+        refusal(
+            "p2 has no 3D model and no width, depth and height to draw one at: edit_products action=attach_model gives it a model, or action=set fields width_cm, depth_cm, height_cm"
+        )
+    );
+}
+
+/// A product id is the account's own: another account's, or a finish, is
+/// refused before anything reaches the project.
+#[tokio::test]
+async fn only_the_accounts_own_furniture_is_placed() {
+    let Some((base, state)) = service().await else {
+        return;
+    };
+    let (_, access, project) = drawn_project(&base, &state, "a@example.com").await;
+    let (_, _, _) = credentials(&base, &state, "b@example.com").await;
+    stock_sofa(&state, "b@example.com", "theirs").await;
+    let account = account_id(&state, "a@example.com").await;
+    stock(
+        &state,
+        &account,
+        "tile",
+        "https://www.praxis.nl/tegel/1",
+        "finish",
+        json!({"title": "Tegel", "finish_type": "covering"}),
+    )
+    .await;
+    let before = stored(&state, &project).await.0;
+    assert_eq!(
+        tool(
+            &base,
+            &access,
+            "place",
+            json!({"items": [{"model": "product:theirs", "at": [10, 10]}]})
+        )
+        .await,
+        refusal("no product theirs (products lists them)")
+    );
+    assert_eq!(
+        tool(
+            &base,
+            &access,
+            "place",
+            json!({"items": [{"model": "product:tile", "at": [10, 10]}]})
+        )
+        .await,
+        refusal("tile is a finish: edit_finishes puts it on a floor, a ceiling or a wall side")
+    );
+    assert_eq!(
+        tool(
+            &base,
+            &access,
+            "edit_finishes",
+            json!({"action": "assign", "surface": "r1:floor", "product": "theirs"})
+        )
+        .await,
+        refusal("no product theirs (products lists them)")
+    );
+    stock_sofa(&state, "a@example.com", "sofa").await;
+    assert_eq!(
+        tool(
+            &base,
+            &access,
+            "edit_finishes",
+            json!({"action": "assign", "surface": "r1:floor", "product": "product:sofa"})
+        )
+        .await,
+        refusal("sofa is a piece of furniture: place model=product:sofa puts it in the room")
+    );
+    assert_eq!(
+        stored(&state, &project).await.0,
+        before,
+        "nothing was saved"
+    );
+    let kept: i64 = sqlx::query_scalar("select count(*) from product_assets")
+        .fetch_one(&state.db)
+        .await
+        .unwrap();
+    assert_eq!(kept, 0, "no placeholder was built for a refused call");
+}
+
+/// With the editor tab open, the model goes to the tab first, and the call
+/// it gets places the staged file; a finish reaches it by its bare id.
+#[tokio::test]
+async fn a_product_placed_in_the_tab_arrives_before_the_call() {
+    use base64::Engine as _;
+    let Some((base, state)) = service().await else {
+        return;
+    };
+    let (cookie, access, _) = credentials(&base, &state, "a@example.com").await;
+    stock_sofa(&state, "a@example.com", "p1").await;
+    let mut socket = claimed_tab(&base, &cookie).await;
+    let placing = tokio::spawn({
+        let (base, access) = (base.clone(), access.clone());
+        async move {
+            tool(
+                &base,
+                &access,
+                "place",
+                json!({"items": [{"model": "product:p1", "at": [200, 150], "name": "Bank"}]}),
+            )
+            .await
+        }
+    });
+    let asset = to_tab(&mut socket).await;
+    assert_eq!(asset["type"], "asset", "{asset}");
+    assert_eq!(asset["path"], "products/p1/model.glb");
+    let sent = base64::engine::general_purpose::STANDARD
+        .decode(asset["data"].as_str().unwrap())
+        .unwrap();
+    let kept: Vec<u8> =
+        sqlx::query_scalar("select data from product_assets where product_id = 'p1'")
+            .fetch_one(&state.db)
+            .await
+            .unwrap();
+    assert_eq!(sent, kept, "the tab gets the model kept");
+    answer_tab(
+        &mut socket,
+        json!({"type": "result", "id": asset["id"], "ok": true, "result": {"path": "products/p1/model.glb"}}),
+    )
+    .await;
+    let call = to_tab(&mut socket).await;
+    assert_eq!(
+        [&call["type"], &call["name"], &call["args"]],
+        [
+            &json!("call"),
+            &json!("place"),
+            &json!({"items": [{"model": "products/p1/model.glb", "product": "p1", "at": [200, 150],
+                               "name": "Bank", "w": 200.0, "d": 90.0, "h": 80.0, "stretch": true}]})
+        ]
+    );
+    answer_tab(
+        &mut socket,
+        json!({"type": "result", "id": call["id"], "ok": true,
+               "result": {"content": [{"type": "text", "text": "ok ids=f1"}], "isError": false}}),
+    )
+    .await;
+    let placed = placing.await.unwrap();
+    assert_eq!(placed["content"][0]["text"], "ok ids=f1");
+    assert_eq!(
+        placed["content"][1]["text"],
+        "p1 has no 3D model yet: it is drawn as a placeholder (sofa-3), a generated approximation stretched to the piece's box. edit_products action=attach_model gives it a model, which replaces the placeholder at once in the project open now (the editor tab, or the server's copy) and in any other project the next time the product is placed there"
+    );
+    tab_left_alone(&mut socket).await;
+
+    let account = account_id(&state, "a@example.com").await;
+    stock(
+        &state,
+        &account,
+        "tile",
+        "https://www.praxis.nl/tegel/1",
+        "finish",
+        json!({"title": "Tegel", "finish_type": "covering"}),
+    )
+    .await;
+    let assigning = tokio::spawn({
+        let (base, access) = (base.clone(), access.clone());
+        async move {
+            tool(
+                &base,
+                &access,
+                "edit_finishes",
+                json!({"action": "assign", "surface": "r1:floor", "product": "product:tile"}),
+            )
+            .await
+        }
+    });
+    let call = to_tab(&mut socket).await;
+    assert_eq!(
+        call["args"],
+        json!({"action": "assign", "surface": "r1:floor", "product": "tile"})
+    );
+    answer_tab(
+        &mut socket,
+        json!({"type": "result", "id": call["id"], "ok": true,
+               "result": {"content": [{"type": "text", "text": "ok"}], "isError": false}}),
+    )
+    .await;
+    assert_eq!(assigning.await.unwrap()["isError"], false);
+    tab_left_alone(&mut socket).await;
+    hang_up(&state, socket, "a@example.com").await;
+}
+
+/// A tab that does not take the file — an editor older than the service —
+/// gets no call that would place a file it does not have.
+#[tokio::test]
+async fn a_tab_that_does_not_take_the_model_gets_no_call() {
+    let Some((base, state)) = service().await else {
+        return;
+    };
+    let (cookie, access, _) = credentials(&base, &state, "a@example.com").await;
+    stock_sofa(&state, "a@example.com", "p1").await;
+    let mut socket = claimed_tab(&base, &cookie).await;
+    let placing = tokio::spawn({
+        let (base, access) = (base.clone(), access.clone());
+        async move {
+            tool(
+                &base,
+                &access,
+                "place",
+                json!({"items": [{"model": "product:p1", "at": [1, 1]}]}),
+            )
+            .await
+        }
+    });
+    let asset = to_tab(&mut socket).await;
+    answer_tab(
+        &mut socket,
+        json!({"type": "result", "id": asset["id"], "ok": false, "error": "no room for it"}),
+    )
+    .await;
+    assert_eq!(
+        placing.await.unwrap(),
+        refusal(
+            "the editor tab did not take the file products/p1/model.glb (no room for it): reload the tab and call again"
+        )
+    );
+    tab_left_alone(&mut socket).await;
+    hang_up(&state, socket, "a@example.com").await;
+}
+
+/// `attach_model` fetches only from the public internet: a link to this
+/// machine, the private network, the cloud's metadata address or the
+/// tailnet is refused before anything is asked of it.
+#[tokio::test]
+async fn a_model_link_off_the_public_internet_is_refused() {
+    let Some((base, state)) = service().await else {
+        return;
+    };
+    let files = model_server().await;
+    let (_, access, _) = credentials(&base, &state, "a@example.com").await;
+    stock_sofa(&state, "a@example.com", "p1").await;
+    // `localhost` is whichever loopback the system gives first.
+    for (url, ips) in [
+        (format!("{files}/sofa.glb"), &["127.0.0.1"][..]),
+        ("http://10.1.2.3/sofa.glb".to_owned(), &["10.1.2.3"]),
+        (
+            "http://169.254.169.254/latest/meta-data".to_owned(),
+            &["169.254.169.254"],
+        ),
+        (
+            "http://100.76.21.14:8790/sofa.glb".to_owned(),
+            &["100.76.21.14"],
+        ),
+        ("http://[::1]/sofa.glb".to_owned(), &["::1"]),
+        (
+            "http://localhost/sofa.glb".to_owned(),
+            &["127.0.0.1", "::1"],
+        ),
+    ] {
+        let answer = tool(
+            &base,
+            &access,
+            "edit_products",
+            json!({"id": "p1", "action": "attach_model", "url": url}),
+        )
+        .await;
+        let text = answer["content"][0]["text"].as_str().unwrap_or_default();
+        assert_eq!(answer["isError"], true, "{url}: {answer}");
+        let said = text
+            .strip_prefix(&format!("{url}: "))
+            .and_then(|t| {
+                t.strip_suffix(
+                    " is not on the public internet, and a model is fetched only from there",
+                )
+            })
+            .unwrap_or_default();
+        assert!(ips.contains(&said), "{url}: {text}");
+    }
+    let kept: i64 = sqlx::query_scalar("select count(*) from product_assets")
+        .fetch_one(&state.db)
+        .await
+        .unwrap();
+    assert_eq!(kept, 0);
+}
+
+/// A placeholder keeps the shape it was first built in: a placement asking
+/// for another one is refused, so the file under the pieces placed with it
+/// never changes shape — also between two items of one call.
+#[tokio::test]
+async fn a_placeholder_keeps_the_shape_it_was_first_drawn_in() {
+    let Some((base, state)) = service().await else {
+        return;
+    };
+    let (_, access, project) = drawn_project(&base, &state, "a@example.com").await;
+    stock_sofa(&state, "a@example.com", "p1").await;
+    stock_sofa(&state, "a@example.com", "p2").await;
+    let place = |items: Value| {
+        let (base, access) = (base.clone(), access.clone());
+        async move { tool(&base, &access, "place", json!({ "items": items })).await }
+    };
+    let first = place(json!([{"model": "product:p1", "cat": "sofa-3", "at": [100, 100]}])).await;
+    assert_eq!(first["isError"], false, "{first}");
+    let model = |id: &'static str| {
+        let db = state.db.clone();
+        async move {
+            sqlx::query_as::<_, (Vec<u8>, Option<String>)>(
+                "select data, basis from product_assets where product_id = $1",
+            )
+            .bind(id)
+            .fetch_one(&db)
+            .await
+            .unwrap()
+        }
+    };
+    let drawn = model("p1").await;
+    let saved = stored(&state, &project).await.0;
+    assert_eq!(
+        place(json!([{"model": "product:p1", "cat": "wardrobe", "at": [300, 100]}])).await,
+        refusal(
+            "p1 is drawn as sofa-3 already: cat=wardrobe would change the placeholder under the pieces placed with it; leave cat out"
+        )
+    );
+    assert_eq!(model("p1").await, drawn, "the file did not change");
+    let same = place(json!([{"model": "product:p1", "cat": "sofa-3", "at": [300, 100]}, {"model": "product:p1", "at": [500, 100]}])).await;
+    assert_eq!(
+        same["isError"], false,
+        "the same shape, or none asked: {same}"
+    );
+    assert_eq!(model("p1").await, drawn);
+    let saved_after = stored(&state, &project).await.0;
+    assert_eq!(
+        place(
+            json!([{"model": "product:p2", "cat": "sofa-3", "at": [100, 200]},
+                     {"model": "product:p2", "cat": "wardrobe", "at": [300, 200]}])
+        )
+        .await,
+        refusal(
+            "p2 is drawn as sofa-3 already: cat=wardrobe would change the placeholder under the pieces placed with it; leave cat out"
+        )
+    );
+    assert!(saved_after > saved);
+    assert_eq!(
+        stored(&state, &project).await.0,
+        saved_after,
+        "nothing placed"
+    );
+}
+
+/// A model attached to a product drawn as a placeholder replaces it in the
+/// project the server has open, which is saved with it.
+#[tokio::test]
+async fn an_attached_model_replaces_the_placeholder_in_the_open_project() {
+    let Some((base, state)) = service().await else {
+        return;
+    };
+    let files = model_server().await;
+    state.links.allow_for_tests("127.0.0.1".parse().unwrap());
+    let (_, access, project) = drawn_project(&base, &state, "a@example.com").await;
+    stock_sofa(&state, "a@example.com", "p1").await;
+    let placed = tool(
+        &base,
+        &access,
+        "place",
+        json!({"items": [{"model": "product:p1", "at": [200, 150]}]}),
+    )
+    .await;
+    assert_eq!(placed["isError"], false, "{placed}");
+    let attached = said_json(
+        &tool(
+            &base,
+            &access,
+            "edit_products",
+            json!({"id": "p1", "action": "attach_model", "url": format!("{files}/sofa.glb")}),
+        )
+        .await,
+    );
+    assert_eq!(
+        attached["drawn"],
+        "in the active project now, saved with it; any other project takes it the next time the product is placed there"
+    );
+    let kept: Vec<u8> =
+        sqlx::query_scalar("select data from product_assets where product_id = 'p1'")
+            .fetch_one(&state.db)
+            .await
+            .unwrap();
+    let (_, bytes) = stored(&state, &project).await;
+    let (_, inside) = newera_core::project_from_bytes(&bytes).unwrap();
+    let file = inside
+        .iter()
+        .find(|(name, _)| name == "products/p1/model.glb")
+        .map(|(_, data)| data.clone());
+    assert_eq!(file, Some(kept), "the stored project holds the new model");
+}
+
+/// With the editor tab open, an attached model goes to the tab at once.
+#[tokio::test]
+async fn an_attached_model_goes_to_the_open_tab() {
+    let Some((base, state)) = service().await else {
+        return;
+    };
+    let files = model_server().await;
+    state.links.allow_for_tests("127.0.0.1".parse().unwrap());
+    let (cookie, access, _) = credentials(&base, &state, "a@example.com").await;
+    stock_sofa(&state, "a@example.com", "p1").await;
+    let mut socket = claimed_tab(&base, &cookie).await;
+    let attaching = tokio::spawn({
+        let (base, access, url) = (base.clone(), access.clone(), format!("{files}/sofa.glb"));
+        async move {
+            tool(
+                &base,
+                &access,
+                "edit_products",
+                json!({"id": "p1", "action": "attach_model", "url": url}),
+            )
+            .await
+        }
+    });
+    let asset = to_tab(&mut socket).await;
+    assert_eq!(
+        [&asset["type"], &asset["path"], &asset["replace"]],
+        [
+            &json!("asset"),
+            &json!("products/p1/model.glb"),
+            &json!(true)
+        ],
+        "a replacement, kept only where the tab's document uses it"
+    );
+    answer_tab(
+        &mut socket,
+        json!({"type": "result", "id": asset["id"], "ok": true,
+               "result": {"path": "products/p1/model.glb", "kept": true}}),
+    )
+    .await;
+    let attached = said_json(&attaching.await.unwrap());
+    assert_eq!(
+        attached["drawn"],
+        "in the open editor tab now; any other project takes it the next time the product is placed there"
+    );
+    tab_left_alone(&mut socket).await;
+    // A tab whose document does not draw the product keeps nothing, and
+    // the answer says so.
+    let again = tokio::spawn({
+        let (base, access, url) = (base.clone(), access.clone(), format!("{files}/sofa.glb"));
+        async move {
+            tool(
+                &base,
+                &access,
+                "edit_products",
+                json!({"id": "p1", "action": "attach_model", "url": url}),
+            )
+            .await
+        }
+    });
+    let asset = to_tab(&mut socket).await;
+    answer_tab(
+        &mut socket,
+        json!({"type": "result", "id": asset["id"], "ok": true,
+               "result": {"path": "products/p1/model.glb", "kept": false}}),
+    )
+    .await;
+    assert_eq!(
+        said_json(&again.await.unwrap())["drawn"],
+        "each project takes it the next time the product is placed there"
+    );
+    tab_left_alone(&mut socket).await;
+    hang_up(&state, socket, "a@example.com").await;
+}
+
+/// A product's model counts against the plan's storage, beside the
+/// projects: one that does not fit is not kept.
+#[tokio::test]
+async fn a_model_over_the_plans_storage_is_not_kept() {
+    let Some((base, state)) = service().await else {
+        return;
+    };
+    let files = model_server().await;
+    state.links.allow_for_tests("127.0.0.1".parse().unwrap());
+    let (_, access, _) = credentials(&base, &state, "full@example.com").await;
+    stock_sofa(&state, "full@example.com", "p1").await;
+    sqlx::query(
+        r#"insert into plans (code, name, limits) values ('tiny', 'Tiny', '{"projects": 3, "storage_mb": 0, "draft_renders_per_day": 0, "hq_renders_per_month": 0}')"#,
+    )
+    .execute(&state.db)
+    .await
+    .unwrap();
+    sqlx::query("update accounts set given_plan = 'tiny' where email = 'full@example.com'")
+        .execute(&state.db)
+        .await
+        .unwrap();
+    assert_eq!(
+        tool(
+            &base,
+            &access,
+            "edit_products",
+            json!({"id": "p1", "action": "attach_model", "url": format!("{files}/sofa.glb")}),
+        )
+        .await,
+        refusal("the model was not kept: the Tiny plan stores 0 MB and this would take 0 MB")
+    );
+    let kept: i64 = sqlx::query_scalar("select count(*) from product_assets")
+        .fetch_one(&state.db)
+        .await
+        .unwrap();
+    assert_eq!(kept, 0);
+}
