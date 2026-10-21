@@ -339,6 +339,29 @@ impl NewEraApp {
         }
     }
 
+    /// Saves the cloud project this tab opened back to the service, and
+    /// opens the service's copy in its place when somebody saved it first.
+    #[cfg(target_arch = "wasm32")]
+    fn autosave(&mut self, ctx: &egui::Context) {
+        match crate::ai_web::autosave(&self.document, ctx, &self.ai_link) {
+            Some(crate::ai_web::Said::Reload {
+                name,
+                bytes,
+                revision,
+            }) => {
+                if self.open_bytes(&name, &bytes) {
+                    let now = self.document.read().revision();
+                    crate::ai_web::bind(&self.ai_link, &name, revision, now);
+                    self.set_status(crate::i18n::tr(
+                        "O projeto mudou na nuvem: esta aba baixou uma cópia do seu e abriu a versão da nuvem.",
+                    ));
+                }
+            }
+            Some(crate::ai_web::Said::Note(text)) => self.set_status(text),
+            None => {}
+        }
+    }
+
     /// The plan is drawn on the paper of the theme in use; when the system
     /// flips from day to night under the window, the sheet flips with it.
     fn follow_theme(&mut self, ctx: &egui::Context) {
@@ -655,6 +678,10 @@ impl NewEraApp {
     }
 
     fn after_load(&mut self) {
+        // Whatever was opened is not the cloud project any more; reopening
+        // the cloud copy binds it again.
+        #[cfg(target_arch = "wasm32")]
+        crate::ai_web::unbind(&self.ai_link);
         self.selection.clear();
         self.plan.cancel();
         self.plan.request_fit();
@@ -2810,6 +2837,9 @@ impl eframe::App for NewEraApp {
         if self.mirrored.1.elapsed() > Duration::from_millis(1500) {
             self.mirror();
         }
+        // A cloud project goes back to the service a moment after it changes.
+        #[cfg(target_arch = "wasm32")]
+        self.autosave(&ctx);
     }
 
     fn save(&mut self, storage: &mut dyn eframe::Storage) {

@@ -10,7 +10,7 @@ use serde_json::json;
 
 use crate::login::{self, SESSION};
 use crate::pages::{Lang, escape, page};
-use crate::{AppState, accounts, secret};
+use crate::{AppState, accounts, engine, secret};
 
 fn close_token(session: &str) -> String {
     secret::hash(&format!("close:{session}"))
@@ -117,19 +117,145 @@ pub async fn download(
     let Some(account) = login::signed_in(&app, &headers).await else {
         return Redirect::to("/login?return_to=/account").into_response();
     };
-    let found: Option<(String, Vec<u8>)> =
-        sqlx::query_as("select name, data from projects where id = $1 and account_id = $2")
-            .bind(&id)
-            .bind(&account.id)
-            .fetch_optional(&app.db)
-            .await
-            .ok()
-            .flatten();
+    let found: Option<(String, Vec<u8>, i64)> = sqlx::query_as(
+        "select name, data, revision from projects where id = $1 and account_id = $2",
+    )
+    .bind(&id)
+    .bind(&account.id)
+    .fetch_optional(&app.db)
+    .await
+    .ok()
+    .flatten();
     match found {
-        Some((name, data)) => {
-            crate::files::download(&format!("{name}.newera"), "application/zip", data)
+        Some((name, data, revision)) => {
+            let mut response =
+                crate::files::download(&format!("{name}.newera"), "application/zip", data);
+            response
+                .headers_mut()
+                .insert(REVISION, header::HeaderValue::from(revision));
+            response
         }
         None => StatusCode::NOT_FOUND.into_response(),
+    }
+}
+
+/// The header a project's revision travels in: answered with the project,
+/// sent back with a save, answered again with the revision the save made.
+pub const REVISION: header::HeaderName = header::HeaderName::from_static("x-project-revision");
+
+/// Keeps a cloud project the editor tab sends back, if it is still the
+/// revision the tab loaded (`X-Project-Revision`). Answers the new revision;
+/// 409 when somebody saved since, 413 when the plan has no room for it.
+pub async fn upload(
+    State(app): State<AppState>,
+    headers: HeaderMap,
+    axum::extract::Path(id): axum::extract::Path<String>,
+    body: axum::body::Body,
+) -> Response {
+    if !from_site(&app, &headers) {
+        return (StatusCode::FORBIDDEN, "only the editor can save a project").into_response();
+    }
+    let Some(account) = login::signed_in(&app, &headers).await else {
+        return StatusCode::UNAUTHORIZED.into_response();
+    };
+    let Some(from) = headers
+        .get(&REVISION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.trim().parse::<i64>().ok())
+    else {
+        return (
+            StatusCode::PRECONDITION_REQUIRED,
+            "X-Project-Revision: the revision this project was loaded at",
+        )
+            .into_response();
+    };
+    match save_upload(&app, &account.id, &id, from, body).await {
+        Ok(response) => response,
+        Err(err) => {
+            tracing::error!("saving a project from the editor: {err}");
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        }
+    }
+}
+
+/// Why a body was not read to its end.
+#[derive(Debug, PartialEq, Eq)]
+enum Capped {
+    /// More than `most` bytes came.
+    TooLarge,
+    /// The sender went away, or the connection failed, before the end.
+    Aborted,
+}
+
+/// The body, read until it passes `most` bytes — then no further.
+async fn read_capped(body: axum::body::Body, most: usize) -> Result<Vec<u8>, Capped> {
+    use axum::body::HttpBody as _;
+    let mut body = std::pin::pin!(body);
+    let mut bytes = Vec::new();
+    while let Some(frame) = std::future::poll_fn(|cx| body.as_mut().poll_frame(cx)).await {
+        let frame = frame.map_err(|_| Capped::Aborted)?;
+        if let Ok(data) = frame.into_data() {
+            if data.len() > most - bytes.len() {
+                return Err(Capped::TooLarge);
+            }
+            bytes.extend_from_slice(&data);
+        }
+    }
+    Ok(bytes)
+}
+
+async fn save_upload(
+    app: &AppState,
+    account: &str,
+    id: &str,
+    from: i64,
+    body: axum::body::Body,
+) -> anyhow::Result<Response> {
+    let current: Option<i64> =
+        sqlx::query_scalar("select revision from projects where id = $1 and account_id = $2")
+            .bind(id)
+            .bind(account)
+            .fetch_optional(&app.db)
+            .await?;
+    let Some(current) = current else {
+        return Ok(StatusCode::NOT_FOUND.into_response());
+    };
+    let plan = accounts::plan_of(&app.db, account).await?;
+    // Nothing bigger than all the plan stores can be kept: read no more.
+    let bytes = match read_capped(
+        body,
+        usize::try_from(engine::storage_limit(&plan)).unwrap_or(0),
+    )
+    .await
+    {
+        Ok(bytes) => bytes,
+        Err(Capped::TooLarge) => {
+            let why = format!(
+                "the {} plan stores {} MB of projects and this one is bigger than that",
+                plan.name,
+                engine::storage_limit(&plan) / 1024 / 1024
+            );
+            return Ok((StatusCode::PAYLOAD_TOO_LARGE, Json(json!({"error": why}))).into_response());
+        }
+        Err(Capped::Aborted) => return Ok(StatusCode::BAD_REQUEST.into_response()),
+    };
+    match engine::store(&app.db, account, &plan, id, from, &bytes).await? {
+        engine::Stored::Saved(revision) => {
+            app.engine.forget(account, id, revision).await;
+            Ok((
+                [(REVISION, header::HeaderValue::from(revision))],
+                Json(json!({"revision": revision})),
+            )
+                .into_response())
+        }
+        engine::Stored::Stale => Ok((
+            StatusCode::CONFLICT,
+            Json(json!({"error": "the project changed since this tab loaded it", "revision": current})),
+        )
+            .into_response()),
+        engine::Stored::Full(why) => {
+            Ok((StatusCode::PAYLOAD_TOO_LARGE, Json(json!({"error": why}))).into_response())
+        }
     }
 }
 
@@ -253,5 +379,33 @@ pub async fn claim(
         Ok(()) => Json(json!({"ok": true, "mcp_url": format!("{}/mcp", app.config.public_url)}))
             .into_response(),
         Err(why) => (StatusCode::FORBIDDEN, why).into_response(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Capped, read_capped};
+    use axum::body::{Body, Bytes};
+
+    fn chunks(parts: Vec<Result<&'static [u8], &'static str>>) -> Body {
+        Body::from_stream(futures_util::stream::iter(
+            parts
+                .into_iter()
+                .map(|p| p.map(Bytes::from_static).map_err(std::io::Error::other)),
+        ))
+    }
+
+    #[tokio::test]
+    async fn a_body_is_read_up_to_the_cap_and_no_further() {
+        let body = chunks(vec![Ok(b"abc"), Ok(b"de")]);
+        assert_eq!(read_capped(body, 5).await, Ok(b"abcde".to_vec()));
+        let body = chunks(vec![Ok(b"abc"), Ok(b"def")]);
+        assert_eq!(read_capped(body, 5).await, Err(Capped::TooLarge));
+    }
+
+    #[tokio::test]
+    async fn a_sender_that_goes_away_is_not_a_body_too_large() {
+        let body = chunks(vec![Ok(b"abc"), Err("connection reset")]);
+        assert_eq!(read_capped(body, 1000).await, Err(Capped::Aborted));
     }
 }

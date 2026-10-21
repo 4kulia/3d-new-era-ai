@@ -245,7 +245,8 @@
   const params = new URLSearchParams(location.search);
   const url = params.get("project") ?? "../demo.newera";
   const service = params.get("relay") ?? "https://mcp.3dneweraai.com";
-  let name = null, bytes = null;
+  // Its revision comes with it: the tab saves it back on that revision.
+  let name = null, bytes = null, revision = null;
   try {
     const own = url.startsWith(service + "/account/projects/");
     const response = await fetch(url, { credentials: own ? "include" : "same-origin" });
@@ -253,6 +254,7 @@
       bytes = new Uint8Array(await response.arrayBuffer());
       const saved = /filename="([^"]+)"/.exec(response.headers.get("content-disposition") ?? "");
       name = saved ? saved[1] : decodeURIComponent(url.split("/").pop());
+      if (own) revision = response.headers.get("x-project-revision");
     }
   } catch (_) { /* start empty */ }
   try {
@@ -266,7 +268,7 @@
       glue = await boot(true);
     }
     loading.remove();
-    await glue.start("newera", name, bytes, params.has("project"));
+    await glue.start("newera", name, bytes, params.has("project"), revision);
     window.neweraReady = true;
   } catch (error) {
     window.neweraFail(error);

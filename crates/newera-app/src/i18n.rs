@@ -1782,6 +1782,20 @@ fn translations(pt: &str) -> Option<[&'static str; 3]> {
         "Grama" => ["Grass", "Césped", "Gazon"],
         "Água (piscina)" => ["Water (pool)", "Agua (piscina)", "Eau (piscine)"],
         "Deck de madeira" => ["Wood deck", "Tarima de madera", "Terrasse en bois"],
+        "O projeto mudou na nuvem: esta aba baixou uma cópia do seu e abriu a versão da nuvem." => {
+            [
+                "The project changed in the cloud: this tab downloaded a copy of yours and opened the cloud version.",
+                "El proyecto cambió en la nube: esta pestaña descargó una copia del suyo y abrió la versión de la nube.",
+                "Le projet a changé dans le cloud : cet onglet a téléchargé une copie du vôtre et ouvert la version du cloud.",
+            ]
+        }
+        "⚠ O projeto mudou na nuvem e esta aba guardou uma cópia; a versão da nuvem não abriu: {}" => {
+            [
+                "⚠ The project changed in the cloud and this tab kept a copy; the cloud version did not open: {}",
+                "⚠ El proyecto cambió en la nube y esta pestaña guardó una copia; la versión de la nube no se abrió: {}",
+                "⚠ Le projet a changé dans le cloud et cet onglet a gardé une copie ; la version du cloud ne s'est pas ouverte : {}",
+            ]
+        }
         "Projeto recuperado desta sessão." => [
             "Project recovered from this session.",
             "Proyecto recuperado de esta sesión.",

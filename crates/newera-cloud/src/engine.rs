@@ -14,6 +14,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -36,8 +37,98 @@ const FILE_HOURS: i32 = 24;
 struct Loaded {
     project: String,
     doc: SharedDocument,
+    /// This copy's own directory: no other copy of the project, old or new,
+    /// reads or writes in it. It goes when the copy is dropped.
+    dir: PathBuf,
     file: PathBuf,
     touched: Mutex<Instant>,
+    /// The stored revision this copy was loaded at, or last saved as. Held
+    /// for the whole of a save, so two calls saving at once follow on from
+    /// each other instead of both claiming the same revision.
+    revision: tokio::sync::Mutex<i64>,
+    /// The same revision, readable without waiting for a save to end.
+    known: AtomicI64,
+}
+
+impl Drop for Loaded {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.dir);
+    }
+}
+
+/// How a save went.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Stored {
+    /// Kept, as this revision.
+    Saved(i64),
+    /// Somebody saved since the revision the save started from: nothing kept.
+    Stale,
+    /// The plan has no room for it; this says why. Nothing kept.
+    Full(String),
+}
+
+/// Keeps a project's bytes if the plan has room for them and the stored
+/// revision is still `from`, as `from + 1`. Every save goes through here:
+/// the engine's, and the editor tab's.
+///
+/// # Errors
+///
+/// When the database fails.
+pub async fn store(
+    db: &PgPool,
+    account: &str,
+    plan: &Plan,
+    project: &str,
+    from: i64,
+    bytes: &[u8],
+) -> sqlx::Result<Stored> {
+    let others: i64 = sqlx::query_scalar(
+        "select coalesce(sum(size), 0)::bigint from projects where account_id = $1 and id <> $2",
+    )
+    .bind(account)
+    .bind(project)
+    .fetch_one(db)
+    .await?;
+    let size = i64::try_from(bytes.len()).unwrap_or(i64::MAX);
+    if let Some(why) = no_room(plan, others.saturating_add(size)) {
+        return Ok(Stored::Full(why));
+    }
+    let saved: Option<i64> = sqlx::query_scalar(
+        "update projects set data = $1, size = $2, updated_at = now(), revision = revision + 1
+         where id = $3 and account_id = $4 and revision = $5 returning revision",
+    )
+    .bind(bytes)
+    .bind(i32::try_from(bytes.len()).unwrap_or(i32::MAX))
+    .bind(project)
+    .bind(account)
+    .bind(from)
+    .fetch_optional(db)
+    .await?;
+    Ok(saved.map_or(Stored::Stale, Stored::Saved))
+}
+
+/// How many bytes of projects the plan stores.
+#[must_use]
+pub fn storage_limit(plan: &Plan) -> i64 {
+    plan.limits["storage_mb"]
+        .as_i64()
+        .unwrap_or(0)
+        .saturating_mul(1024 * 1024)
+}
+
+/// What to say when an account's projects would take `total` bytes and the
+/// plan stores less; `None` when it has room.
+#[must_use]
+pub fn no_room(plan: &Plan, total: i64) -> Option<String> {
+    let limit = storage_limit(plan);
+    (total > limit).then(|| {
+        format!(
+            "the {} plan stores {} MB and this would take {} MB",
+            plan.name,
+            limit / 1024 / 1024,
+            total / 1024 / 1024
+        )
+    })
 }
 
 /// The engine: the projects open now, and the gate for heavy work.
@@ -45,6 +136,9 @@ struct Loaded {
 pub struct Engine {
     root: PathBuf,
     loaded: Mutex<HashMap<String, Arc<Loaded>>>,
+    /// One per account, held while its project is being opened, so two calls
+    /// arriving together open one copy and not two.
+    opening: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
     heavy: Arc<tokio::sync::Semaphore>,
     busy: Mutex<HashSet<String>>,
     reads: HashSet<String>,
@@ -83,6 +177,7 @@ impl Engine {
         Ok(Self {
             root,
             loaded: Mutex::new(HashMap::new()),
+            opening: Mutex::new(HashMap::new()),
             heavy: Arc::new(tokio::sync::Semaphore::new(cores.saturating_sub(1).max(1))),
             busy: Mutex::new(HashSet::new()),
             reads,
@@ -97,6 +192,10 @@ impl Engine {
     pub fn sweep(&self, idle: Duration) {
         let mut loaded = self.loaded.lock().expect("loaded");
         loaded.retain(|_, l| l.touched.lock().expect("touched").elapsed() < idle);
+        self.opening
+            .lock()
+            .expect("opening")
+            .retain(|_, gate| Arc::strong_count(gate) > 1);
     }
 
     /// Runs one tool for an account, on its active project.
@@ -411,6 +510,14 @@ impl Engine {
 
     /// The account's active project, open — made first if it has none.
     async fn loaded(&self, db: &PgPool, account: &str, plan: &Plan) -> anyhow::Result<Arc<Loaded>> {
+        let gate = self
+            .opening
+            .lock()
+            .expect("opening")
+            .entry(account.to_owned())
+            .or_default()
+            .clone();
+        let _opening = gate.lock().await;
         let active: Option<String> =
             sqlx::query_scalar("select project_id from active_projects where account_id = $1")
                 .bind(account)
@@ -430,18 +537,28 @@ impl Engine {
                 .fetch_one(db)
                 .await?
         };
-        let data: Vec<u8> =
-            sqlx::query_scalar("select data from projects where id = $1 and account_id = $2")
+        let (data, revision): (Vec<u8>, i64) =
+            sqlx::query_as("select data, revision from projects where id = $1 and account_id = $2")
                 .bind(&project)
                 .bind(account)
                 .fetch_one(db)
                 .await?;
-        let dir = self.root.join("cloud-projects").join(&project);
+        let dir = self.root.join("cloud-projects").join(secret::id());
         tokio::fs::create_dir_all(&dir).await?;
         let file = dir.join("project.newera");
-        tokio::fs::write(&file, &data).await?;
+        // From here the copy owns the directory, and drops it with itself.
+        let mut copy = Loaded {
+            project,
+            doc: SharedDocument::new(Document::default()),
+            dir,
+            file,
+            touched: Mutex::new(Instant::now()),
+            revision: tokio::sync::Mutex::new(revision),
+            known: AtomicI64::new(revision),
+        };
+        tokio::fs::write(&copy.file, &data).await?;
         let opened = {
-            let file = file.clone();
+            let file = copy.file.clone();
             tokio::task::spawn_blocking(move || {
                 let mut doc = Document::default();
                 newera_sh3d::open_file(&mut doc, &file).map(|_| doc)
@@ -449,12 +566,8 @@ impl Engine {
             .await?
         };
         let doc = opened.map_err(|why| anyhow::anyhow!("the project would not open: {why}"))?;
-        let loaded = Arc::new(Loaded {
-            project,
-            doc: SharedDocument::new(doc),
-            file,
-            touched: Mutex::new(Instant::now()),
-        });
+        copy.doc = SharedDocument::new(doc);
+        let loaded = Arc::new(copy);
         self.loaded
             .lock()
             .expect("loaded")
@@ -462,14 +575,45 @@ impl Engine {
         Ok(loaded)
     }
 
-    /// Writes the project back. `Some(why)` when the plan has no room for it.
+    /// Forgets the account's copy of `project` if it is older than
+    /// `revision`, which was just kept: the next call loads the kept one. A
+    /// copy at `revision` or later is the kept one already. Waits for a copy
+    /// being opened right now, so one read from before the save does not
+    /// outlive it.
+    ///
+    /// # Panics
+    ///
+    /// If another thread panicked while holding the open projects.
+    pub async fn forget(&self, account: &str, project: &str, revision: i64) {
+        let gate = self
+            .opening
+            .lock()
+            .expect("opening")
+            .entry(account.to_owned())
+            .or_default()
+            .clone();
+        let _opening = gate.lock().await;
+        let mut loaded = self.loaded.lock().expect("loaded");
+        if loaded
+            .get(account)
+            .is_some_and(|l| l.project == project && l.known.load(Ordering::SeqCst) < revision)
+        {
+            loaded.remove(account);
+        }
+    }
+
+    /// Writes the project back. `Some(why)` when it was not kept: the plan
+    /// has no room for it, or the project was saved from elsewhere since this
+    /// copy was loaded — then the copy is dropped and the saved one loaded,
+    /// and the call that changed it is to be made again.
     async fn save(
         &self,
         db: &PgPool,
         account: &str,
         plan: &Plan,
-        loaded: &Loaded,
+        loaded: &Arc<Loaded>,
     ) -> anyhow::Result<Option<String>> {
+        let mut revision = loaded.revision.lock().await;
         let bytes = {
             let (doc, file) = (loaded.doc.clone(), loaded.file.clone());
             tokio::task::spawn_blocking(move || {
@@ -478,31 +622,30 @@ impl Engine {
             })
             .await??
         };
-        let others: i64 = sqlx::query_scalar(
-            "select coalesce(sum(size), 0)::bigint from projects where account_id = $1 and id <> $2",
-        )
-        .bind(account)
-        .bind(&loaded.project)
-        .fetch_one(db)
-        .await?;
-        let limit = plan.limits["storage_mb"].as_i64().unwrap_or(0) * 1024 * 1024;
-        let size = i64::try_from(bytes.len()).unwrap_or(i64::MAX);
-        if others + size > limit {
-            return Ok(Some(format!(
-                "the change is on screen but was not kept: the {} plan stores {} MB and this would take {} MB",
-                plan.name,
-                limit / 1024 / 1024,
-                (others + size) / 1024 / 1024
-            )));
+        match store(db, account, plan, &loaded.project, *revision, &bytes).await? {
+            Stored::Saved(saved) => {
+                *revision = saved;
+                loaded.known.store(saved, Ordering::SeqCst);
+                // Another copy of this project, opened at an earlier
+                // revision, is out of date now: reads must not see it.
+                self.forget(account, &loaded.project, saved).await;
+                Ok(None)
+            }
+            Stored::Full(why) => Ok(Some(format!(
+                "the change is on screen but was not kept: {why}"
+            ))),
+            Stored::Stale => {
+                drop(revision);
+                {
+                    let mut open = self.loaded.lock().expect("loaded");
+                    if open.get(account).is_some_and(|l| Arc::ptr_eq(l, loaded)) {
+                        open.remove(account);
+                    }
+                }
+                self.loaded(db, account, plan).await?;
+                Ok(Some("the project changed, call again".to_owned()))
+            }
         }
-        sqlx::query("update projects set data = $1, size = $2, updated_at = now() where id = $3 and account_id = $4")
-            .bind(&bytes)
-            .bind(i32::try_from(bytes.len()).unwrap_or(i32::MAX))
-            .bind(&loaded.project)
-            .bind(account)
-            .execute(db)
-            .await?;
-        Ok(None)
     }
 }
 
@@ -579,6 +722,26 @@ async fn keep_file(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_copy_takes_its_directory_with_it() {
+        let dir = std::env::temp_dir().join(format!("engine-drop-{}", super::secret::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("project.newera");
+        std::fs::write(&file, b"x").unwrap();
+        let copy = super::Loaded {
+            project: "p".into(),
+            doc: super::SharedDocument::new(super::Document::default()),
+            dir: dir.clone(),
+            file,
+            touched: std::sync::Mutex::new(std::time::Instant::now()),
+            revision: tokio::sync::Mutex::new(1),
+            known: super::AtomicI64::new(1),
+        };
+        assert!(dir.exists());
+        drop(copy);
+        assert!(!dir.exists());
+    }
+
     #[test]
     fn a_name_is_never_a_path() {
         assert_eq!(

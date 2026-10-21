@@ -373,6 +373,37 @@ fn deflated() -> zip::write::SimpleFileOptions {
 /// The document's asset paths are left untouched; the bundle stores them
 /// renamed where needed.
 pub fn save_project(doc: &Document, path: &Path) -> Result<(), ProjectError> {
+    let tmp = path.with_extension("newera.tmp");
+    let file = std::fs::File::create(&tmp)?;
+    match write_bundle(doc, std::io::BufWriter::new(file)) {
+        Ok(sink) => drop(sink),
+        Err(ProjectError::Cancelled) => {
+            // Nothing is renamed into place, so the saved file is whatever
+            // it was before this started.
+            let _ = std::fs::remove_file(&tmp);
+            return Err(ProjectError::Cancelled);
+        }
+        Err(err) => return Err(err),
+    }
+    std::fs::rename(tmp, path)?;
+    Ok(())
+}
+
+/// A project as the bytes of a `.newera` bundle with every referenced file,
+/// read where [`save_project`] reads them (the mounted files of a browser
+/// tab included): for saving where there is no file system.
+///
+/// # Errors
+///
+/// When a referenced file cannot be read, or the save is cancelled.
+pub fn to_bundle_bytes(doc: &Document) -> Result<Vec<u8>, ProjectError> {
+    write_bundle(doc, std::io::Cursor::new(Vec::new())).map(std::io::Cursor::into_inner)
+}
+
+fn write_bundle<W: std::io::Write + std::io::Seek>(
+    doc: &Document,
+    sink: W,
+) -> Result<W, ProjectError> {
     let files = bundle_files(doc);
     // The bundle's own JSON counts as one part, then a part per file.
     let parts = files.len() as u64 + 1;
@@ -389,43 +420,33 @@ pub fn save_project(doc: &Document, path: &Path) -> Result<(), ProjectError> {
         .collect();
     copy.load_variants(variants, doc.active_variant());
 
-    let tmp = path.with_extension("newera.tmp");
-    {
-        let file = std::fs::File::create(&tmp)?;
-        let mut zip = zip::ZipWriter::new(std::io::BufWriter::new(file));
-        zip.start_file(BUNDLE_JSON, deflated())?;
-        std::io::Write::write_all(&mut zip, to_project_json(&copy).as_bytes())?;
-        for (done, (source, name)) in files.into_iter().enumerate() {
-            crate::progress::step("Guardando imagens e modelos", done as u64 + 1, parts);
-            if crate::progress::cancelled() {
-                // Nothing is renamed into place, so the saved file is
-                // whatever it was before this started.
-                drop(zip);
-                let _ = std::fs::remove_file(&tmp);
-                return Err(ProjectError::Cancelled);
-            }
-            match crate::vfs::read(&source) {
-                Ok(bytes) => {
-                    let options = if already_compressed(&name) {
-                        zip::write::SimpleFileOptions::default()
-                            .compression_method(zip::CompressionMethod::Stored)
-                    } else {
-                        deflated()
-                    };
-                    let bytes = packed_asset(&name, bytes);
-                    zip.start_file(name, options)?;
-                    std::io::Write::write_all(&mut zip, &bytes)?;
-                }
-                // A missing file is kept as a dangling reference rather than
-                // losing the whole save.
-                Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
-                Err(err) => return Err(err.into()),
-            }
+    let mut zip = zip::ZipWriter::new(sink);
+    zip.start_file(BUNDLE_JSON, deflated())?;
+    std::io::Write::write_all(&mut zip, to_project_json(&copy).as_bytes())?;
+    for (done, (source, name)) in files.into_iter().enumerate() {
+        crate::progress::step("Guardando imagens e modelos", done as u64 + 1, parts);
+        if crate::progress::cancelled() {
+            return Err(ProjectError::Cancelled);
         }
-        zip.finish()?;
+        match crate::vfs::read(&source) {
+            Ok(bytes) => {
+                let options = if already_compressed(&name) {
+                    zip::write::SimpleFileOptions::default()
+                        .compression_method(zip::CompressionMethod::Stored)
+                } else {
+                    deflated()
+                };
+                let bytes = packed_asset(&name, bytes);
+                zip.start_file(name, options)?;
+                std::io::Write::write_all(&mut zip, &bytes)?;
+            }
+            // A missing file is kept as a dangling reference rather than
+            // losing the whole save.
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+            Err(err) => return Err(err.into()),
+        }
     }
-    std::fs::rename(tmp, path)?;
-    Ok(())
+    Ok(zip.finish()?)
 }
 
 /// Files packed in a bundle, by name.
@@ -679,6 +700,35 @@ mod tests {
         std::fs::write(&plain, to_project_json(&Document::default())).unwrap();
         assert!(open_project(&plain, &root).unwrap().1.is_none());
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_bundle_in_memory_carries_the_mounted_files() {
+        let dir = std::path::PathBuf::from("/mounted-bundle-test/assets");
+        crate::vfs::mount(
+            &dir,
+            vec![("models/box.obj".to_owned(), b"v 0 0 0\n".to_vec())],
+        );
+        let mut home = Home::default();
+        let mut piece = crate::Furniture {
+            model: Some("models/box.obj".into()),
+            ..crate::Furniture::default()
+        };
+        piece.id = home.new_furniture_id();
+        home.furniture.push(piece);
+        let mut doc = Document::new(home);
+        doc.set_asset_dir(Some(dir.clone()));
+
+        let (_, plain) = project_from_bytes(&to_project_bytes(&doc)).unwrap();
+        assert!(plain.is_empty(), "to_project_bytes carries no files");
+        let bytes = to_bundle_bytes(&doc).unwrap();
+        let (project, files) = project_from_bytes(&bytes).unwrap();
+        assert_eq!(
+            files,
+            vec![("models/box.obj".to_owned(), b"v 0 0 0\n".to_vec())]
+        );
+        assert_eq!(project.variants[0].1.furniture.len(), 1);
+        crate::vfs::unmount(&dir);
     }
 
     fn noisy_jpeg(w: u32, h: u32, quality: u8) -> Vec<u8> {

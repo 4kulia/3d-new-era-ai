@@ -1470,12 +1470,26 @@ async fn an_unlisted_address_gets_no_link_and_no_account() {
         listed_page.replace("owner@example.com", "stranger@example.com")
     );
     let links = "select count(*) from login_links where email = $1";
+    // The listed address's link is stored after the answer: once its row is
+    // there, the unlisted one's insert (the same task, asked just before)
+    // has had its turn too.
+    let mut owner = 0;
+    for _ in 0..50 {
+        owner = count(&state, links, "owner@example.com").await;
+        if owner > 0 {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    assert_eq!(
+        owner, 1,
+        "no login link stored for the listed address within 5 s"
+    );
     assert_eq!(
         count(&state, links, "stranger@example.com").await,
         0,
         "no link"
     );
-    assert_eq!(count(&state, links, "owner@example.com").await, 1);
 
     // A proven address that is not listed still opens nothing.
     let token = planted_link(&state, "stranger@example.com").await;
@@ -1882,4 +1896,591 @@ async fn a_slow_send_does_not_slow_the_answer_for_a_listed_address() {
             .all(|t| *t < std::time::Duration::from_millis(500)),
         "answers took {took:?}"
     );
+}
+
+/// An account with one cloud project the engine has open: four walls drawn
+/// through the AI, kept once. Answers the cookie, the access token and the
+/// project's id.
+async fn drawn_project(base: &str, state: &AppState, email: &str) -> (String, String, String) {
+    let (cookie, access, _) = credentials(base, state, email).await;
+    let drawn = tool(
+        base,
+        &access,
+        "create",
+        json!({"walls": [{"pts": [[0, 0], [400, 0], [400, 300], [0, 300]], "closed": true}]}),
+    )
+    .await;
+    assert_eq!(drawn["isError"], false, "{drawn}");
+    let id: String = sqlx::query_scalar(
+        "select p.id from projects p join accounts a on a.id = p.account_id
+         where lower(a.email) = lower($1)",
+    )
+    .bind(email)
+    .fetch_one(&state.db)
+    .await
+    .unwrap();
+    (cookie, access, id)
+}
+
+async fn tool(base: &str, access: &str, name: &str, arguments: Value) -> Value {
+    let (_, answer) = mcp(
+        base,
+        access,
+        json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": name, "arguments": arguments}}),
+    )
+    .await;
+    answer["result"].clone()
+}
+
+/// What the engine's copy of the active project holds, by count.
+async fn counts(base: &str, access: &str) -> Value {
+    let home = tool(base, access, "home", json!({"detail": "summary"})).await;
+    let home: Value = serde_json::from_str(home["content"][0]["text"].as_str().unwrap()).unwrap();
+    home["counts"].clone()
+}
+
+fn counted(walls: u64) -> Value {
+    json!({"walls": walls, "rooms": 0, "dims": 0, "labels": 0, "furniture": 0})
+}
+
+async fn stored(state: &AppState, id: &str) -> (i64, Vec<u8>) {
+    sqlx::query_as("select revision, data from projects where id = $1")
+        .bind(id)
+        .fetch_one(&state.db)
+        .await
+        .unwrap()
+}
+
+fn empty_project() -> Vec<u8> {
+    newera_core::to_project_bytes(&newera_core::Document::default())
+}
+
+async fn put(
+    base: &str,
+    id: &str,
+    cookie: Option<&str>,
+    origin: Option<&str>,
+    revision: Option<&str>,
+    body: Vec<u8>,
+) -> reqwest::Response {
+    let mut request = client()
+        .put(format!("{base}/account/projects/{id}"))
+        .body(body);
+    if let Some(cookie) = cookie {
+        request = request.header("cookie", cookie);
+    }
+    if let Some(origin) = origin {
+        request = request.header("origin", origin);
+    }
+    if let Some(revision) = revision {
+        request = request.header("x-project-revision", revision);
+    }
+    request.send().await.unwrap()
+}
+
+#[tokio::test]
+async fn a_project_comes_with_its_revision_and_a_put_on_it_saves_the_next() {
+    let Some((base, state)) = service().await else {
+        return;
+    };
+    let (cookie, _, id) = drawn_project(&base, &state, "rev@example.com").await;
+    assert_eq!(stored(&state, &id).await.0, 1, "the engine's one save");
+
+    let fetched = client()
+        .get(format!("{base}/account/projects/{id}"))
+        .header("cookie", &cookie)
+        .header("origin", SITE)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(fetched.status(), 200);
+    assert_eq!(fetched.headers()["x-project-revision"], "1");
+    let exposed = fetched.headers()["access-control-expose-headers"]
+        .to_str()
+        .unwrap()
+        .to_ascii_lowercase();
+    assert!(exposed.contains("x-project-revision"), "{exposed}");
+
+    // The browser asks first whether the site may PUT with the header.
+    let preflight = client()
+        .request(
+            reqwest::Method::OPTIONS,
+            format!("{base}/account/projects/{id}"),
+        )
+        .header("origin", SITE)
+        .header("access-control-request-method", "PUT")
+        .header("access-control-request-headers", "x-project-revision")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(preflight.status(), 200);
+    assert_eq!(preflight.headers()["access-control-allow-origin"], SITE);
+    assert_eq!(
+        preflight.headers()["access-control-allow-credentials"],
+        "true"
+    );
+    assert!(
+        preflight.headers()["access-control-allow-methods"]
+            .to_str()
+            .unwrap()
+            .contains("PUT")
+    );
+    assert!(
+        preflight.headers()["access-control-allow-headers"]
+            .to_str()
+            .unwrap()
+            .to_ascii_lowercase()
+            .contains("x-project-revision")
+    );
+
+    let body = empty_project();
+    let saved = put(
+        &base,
+        &id,
+        Some(&cookie),
+        Some(SITE),
+        Some("1"),
+        body.clone(),
+    )
+    .await;
+    assert_eq!(saved.status(), 200);
+    assert_eq!(saved.headers()["x-project-revision"], "2");
+    assert_eq!(saved.headers()["access-control-allow-credentials"], "true");
+    assert_eq!(saved.json::<Value>().await.unwrap(), json!({"revision": 2}));
+    assert_eq!(stored(&state, &id).await, (2, body));
+}
+
+#[tokio::test]
+async fn a_put_on_a_stale_revision_is_refused_and_changes_nothing() {
+    let Some((base, state)) = service().await else {
+        return;
+    };
+    let (cookie, _, id) = drawn_project(&base, &state, "stale@example.com").await;
+    let before = stored(&state, &id).await;
+    for stale in ["0", "2"] {
+        let refused = put(
+            &base,
+            &id,
+            Some(&cookie),
+            Some(SITE),
+            Some(stale),
+            empty_project(),
+        )
+        .await;
+        assert_eq!(refused.status(), 409, "revision {stale}");
+        assert_eq!(
+            refused.json::<Value>().await.unwrap(),
+            json!({"error": "the project changed since this tab loaded it", "revision": 1})
+        );
+        assert_eq!(stored(&state, &id).await, before);
+    }
+    let missing = put(&base, &id, Some(&cookie), Some(SITE), None, empty_project()).await;
+    assert_eq!(missing.status(), 428);
+    let garbled = put(
+        &base,
+        &id,
+        Some(&cookie),
+        Some(SITE),
+        Some("one"),
+        empty_project(),
+    )
+    .await;
+    assert_eq!(garbled.status(), 428);
+    assert_eq!(stored(&state, &id).await, before);
+}
+
+#[tokio::test]
+async fn a_put_is_what_the_next_headless_call_works_on() {
+    let Some((base, state)) = service().await else {
+        return;
+    };
+    let (cookie, access, id) = drawn_project(&base, &state, "evict@example.com").await;
+    assert_eq!(counts(&base, &access).await, counted(4));
+    let saved = put(
+        &base,
+        &id,
+        Some(&cookie),
+        Some(SITE),
+        Some("1"),
+        empty_project(),
+    )
+    .await;
+    assert_eq!(saved.status(), 200);
+    assert_eq!(counts(&base, &access).await, counted(0));
+    // And the engine's own next save follows on from the PUT's revision.
+    let drawn = tool(
+        &base,
+        &access,
+        "create",
+        json!({"walls": [{"pts": [[0, 0], [100, 0]]}]}),
+    )
+    .await;
+    assert_eq!(drawn["isError"], false, "{drawn}");
+    assert_eq!(stored(&state, &id).await.0, 3);
+}
+
+#[tokio::test]
+async fn the_engine_does_not_save_over_a_project_that_changed_under_it() {
+    let Some((base, state)) = service().await else {
+        return;
+    };
+    let (_, access, id) = drawn_project(&base, &state, "cas@example.com").await;
+    assert_eq!(counts(&base, &access).await, counted(4));
+    // Another writer (another process of the service) keeps an empty project.
+    let theirs = empty_project();
+    sqlx::query("update projects set data = $1, revision = revision + 1 where id = $2")
+        .bind(&theirs)
+        .bind(&id)
+        .execute(&state.db)
+        .await
+        .unwrap();
+    let refused = tool(
+        &base,
+        &access,
+        "create",
+        json!({"walls": [{"pts": [[0, 0], [100, 0]]}]}),
+    )
+    .await;
+    assert_eq!(
+        refused,
+        json!({"content": [{"type": "text", "text": "the project changed, call again"}], "isError": true})
+    );
+    assert_eq!(stored(&state, &id).await, (2, theirs));
+    // The engine reloaded: it now works on the other writer's copy.
+    assert_eq!(counts(&base, &access).await, counted(0));
+    let drawn = tool(
+        &base,
+        &access,
+        "create",
+        json!({"walls": [{"pts": [[0, 0], [100, 0]]}]}),
+    )
+    .await;
+    assert_eq!(drawn["isError"], false, "{drawn}");
+    assert_eq!(stored(&state, &id).await.0, 3);
+    assert_eq!(counts(&base, &access).await, counted(1));
+    // Its next save follows on from the one it just made.
+    let again = tool(
+        &base,
+        &access,
+        "create",
+        json!({"walls": [{"pts": [[0, 100], [100, 100]]}]}),
+    )
+    .await;
+    assert_eq!(again["isError"], false, "{again}");
+    assert_eq!(stored(&state, &id).await.0, 4);
+}
+
+#[tokio::test]
+async fn a_put_counts_against_the_plan_storage() {
+    let Some((base, state)) = service().await else {
+        return;
+    };
+    let (cookie, _, id) = drawn_project(&base, &state, "full@example.com").await;
+    let before = stored(&state, &id).await;
+    sqlx::query(
+        r#"insert into plans (code, name, limits) values ('tiny', 'Tiny', '{"projects": 3, "storage_mb": 0, "draft_renders_per_day": 0, "hq_renders_per_month": 0}')"#,
+    )
+    .execute(&state.db)
+    .await
+    .unwrap();
+    sqlx::query("update accounts set given_plan = 'tiny' where email = 'full@example.com'")
+        .execute(&state.db)
+        .await
+        .unwrap();
+    // Bigger than all the plan stores: not even read.
+    let refused = put(
+        &base,
+        &id,
+        Some(&cookie),
+        Some(SITE),
+        Some("1"),
+        empty_project(),
+    )
+    .await;
+    assert_eq!(refused.status(), 413);
+    assert_eq!(
+        refused.json::<Value>().await.unwrap(),
+        json!({"error": "the Tiny plan stores 0 MB of projects and this one is bigger than that"})
+    );
+    assert_eq!(stored(&state, &id).await, before);
+    // Room for it alone, not beside the account's other project.
+    sqlx::query(
+        "update plans set limits = jsonb_set(limits, '{storage_mb}', '1') where code = 'tiny'",
+    )
+    .execute(&state.db)
+    .await
+    .unwrap();
+    // A body bigger than all the plan stores is refused once that much has
+    // arrived, without waiting for the rest: here the rest never comes.
+    let address = base.trim_start_matches("http://").to_owned();
+    let head = format!(
+        "PUT /account/projects/{id} HTTP/1.1\r\nhost: x\r\ncookie: {cookie}\r\norigin: {SITE}\r\nx-project-revision: 1\r\ncontent-length: 10485760\r\n\r\nPK"
+    );
+    let answer = tokio::task::spawn_blocking(move || {
+        use std::io::{Read as _, Write as _};
+        let mut socket = std::net::TcpStream::connect(address).unwrap();
+        socket
+            .set_read_timeout(Some(std::time::Duration::from_secs(10)))
+            .unwrap();
+        socket.write_all(head.as_bytes()).unwrap();
+        // More than the megabyte the plan stores, of the ten announced.
+        socket.write_all(&vec![0_u8; 1024 * 1024 + 1]).unwrap();
+        let mut answer = vec![0_u8; 12];
+        socket
+            .read_exact(&mut answer)
+            .expect("an answer before the body ends");
+        answer
+    })
+    .await
+    .unwrap();
+    assert_eq!(answer, b"HTTP/1.1 413");
+    assert_eq!(stored(&state, &id).await, before);
+    sqlx::query(
+        "insert into projects (id, account_id, name, data, size)
+         select 'other', account_id, 'Other', '', 1048576 from projects where id = $1",
+    )
+    .bind(&id)
+    .execute(&state.db)
+    .await
+    .unwrap();
+    let refused = put(
+        &base,
+        &id,
+        Some(&cookie),
+        Some(SITE),
+        Some("1"),
+        empty_project(),
+    )
+    .await;
+    assert_eq!(refused.status(), 413);
+    assert_eq!(
+        refused.json::<Value>().await.unwrap(),
+        json!({"error": "the Tiny plan stores 1 MB and this would take 1 MB"})
+    );
+    assert_eq!(stored(&state, &id).await, before);
+    // With the other one gone, it fits.
+    sqlx::query("delete from projects where id = 'other'")
+        .execute(&state.db)
+        .await
+        .unwrap();
+    let saved = put(
+        &base,
+        &id,
+        Some(&cookie),
+        Some(SITE),
+        Some("1"),
+        empty_project(),
+    )
+    .await;
+    assert_eq!(saved.status(), 200);
+    assert_eq!(stored(&state, &id).await, (2, empty_project()));
+}
+
+#[tokio::test]
+async fn only_the_owner_puts_a_project_and_only_from_the_site() {
+    let Some((base, state)) = service().await else {
+        return;
+    };
+    let (cookie, _, id) = drawn_project(&base, &state, "owner1@example.com").await;
+    let (other, _, _) = credentials(&base, &state, "other@example.com").await;
+    let before = stored(&state, &id).await;
+    let anonymous = put(&base, &id, None, Some(SITE), Some("1"), empty_project()).await;
+    assert_eq!(anonymous.status(), 401);
+    let stranger = put(
+        &base,
+        &id,
+        Some(&other),
+        Some(SITE),
+        Some("1"),
+        empty_project(),
+    )
+    .await;
+    assert_eq!(stranger.status(), 404);
+    let elsewhere = put(
+        &base,
+        &id,
+        Some(&cookie),
+        Some("https://evil.example"),
+        Some("1"),
+        empty_project(),
+    )
+    .await;
+    assert_eq!(elsewhere.status(), 403);
+    let no_origin = put(&base, &id, Some(&cookie), None, Some("1"), empty_project()).await;
+    assert_eq!(no_origin.status(), 403);
+    assert_eq!(stored(&state, &id).await, before);
+}
+
+/// What the stored project holds, by walls, as the engine reads it back.
+async fn walls_in_db(base: &str, access: &str, id: &str) -> u64 {
+    let opened = tool(base, access, "file", json!({"action": "open", "path": id})).await;
+    assert_eq!(opened["isError"], false, "{opened}");
+    counts(base, access).await["walls"].as_u64().unwrap()
+}
+
+async fn add_wall(base: &str, access: &str, y: i64) -> Value {
+    tool(
+        base,
+        access,
+        "create",
+        json!({"walls": [{"pts": [[0, y], [100, y]]}]}),
+    )
+    .await
+}
+
+#[tokio::test]
+async fn parallel_engine_calls_are_all_saved() {
+    let Some((base, state)) = service().await else {
+        return;
+    };
+    for round in 0..5 {
+        let (_, access, id) =
+            drawn_project(&base, &state, &format!("par{round}@example.com")).await;
+        let calls: Vec<_> = (0..8)
+            .map(|i| {
+                let (base, access) = (base.clone(), access.clone());
+                tokio::spawn(async move { add_wall(&base, &access, 500 + i * 10).await })
+            })
+            .collect();
+        for call in calls {
+            let answer = call.await.unwrap();
+            assert_eq!(answer["isError"], false, "round {round}: {answer}");
+        }
+        // Each took the revision the one before it left: none was stale.
+        assert_eq!(stored(&state, &id).await.0, 9, "round {round}");
+        assert_eq!(walls_in_db(&base, &access, &id).await, 12, "round {round}");
+    }
+}
+
+#[tokio::test]
+async fn calls_arriving_together_open_one_copy() {
+    let Some((base, state)) = service().await else {
+        return;
+    };
+    let (_, access, _) = credentials(&base, &state, "single@example.com").await;
+    let calls: Vec<_> = (0..8)
+        .map(|i| {
+            let (base, access) = (base.clone(), access.clone());
+            tokio::spawn(async move { add_wall(&base, &access, 500 + i * 10).await })
+        })
+        .collect();
+    for call in calls {
+        let answer = call.await.unwrap();
+        assert_eq!(answer["isError"], false, "{answer}");
+    }
+    let rows: Vec<(String, i64)> = sqlx::query_as(
+        "select p.id, p.revision from projects p join accounts a on a.id = p.account_id
+         where a.email = 'single@example.com'",
+    )
+    .fetch_all(&state.db)
+    .await
+    .unwrap();
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    assert_eq!(rows[0].1, 8);
+    assert_eq!(walls_in_db(&base, &access, &rows[0].0).await, 8);
+}
+
+#[tokio::test]
+async fn a_put_racing_engine_calls_loses_nothing() {
+    let Some((base, state)) = service().await else {
+        return;
+    };
+    for round in 0..30 {
+        let (cookie, access, id) =
+            drawn_project(&base, &state, &format!("race{round}@example.com")).await;
+        let calls: Vec<_> = (0..6)
+            .map(|i| {
+                let (base, access) = (base.clone(), access.clone());
+                tokio::spawn(async move { add_wall(&base, &access, 500 + i * 10).await })
+            })
+            .collect();
+        let put = put(
+            &base,
+            &id,
+            Some(&cookie),
+            Some(SITE),
+            Some("1"),
+            empty_project(),
+        )
+        .await;
+        let status = put.status().as_u16();
+        let mut ok = 0_u64;
+        for call in calls {
+            let answer = call.await.unwrap();
+            if answer["isError"] == false {
+                ok += 1;
+            } else {
+                assert_eq!(
+                    answer["content"][0]["text"], "the project changed, call again",
+                    "round {round}: {answer}"
+                );
+            }
+        }
+        assert!(status == 200 || status == 409, "round {round}: {status}");
+        let (revision, _) = stored(&state, &id).await;
+        let engine_walls = counts(&base, &access).await["walls"].as_u64().unwrap();
+        let stored_walls = walls_in_db(&base, &access, &id).await;
+        let put_kept = u64::from(status == 200);
+        assert_eq!(revision.cast_unsigned(), 1 + ok + put_kept, "round {round}");
+        assert_eq!(engine_walls, stored_walls, "round {round}: engine diverged");
+        // A kept PUT is the project, plus only what was saved after it.
+        let before_calls = if status == 200 { 0 } else { 4 };
+        assert_eq!(
+            stored_walls,
+            before_calls + ok,
+            "round {round}: status {status}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn old_and_new_copies_saving_at_once_do_not_cross() {
+    let Some((base, state)) = service().await else {
+        return;
+    };
+    for round in 0..30 {
+        let (cookie, access, id) =
+            drawn_project(&base, &state, &format!("two{round}@example.com")).await;
+        let mut calls: Vec<_> = (0..6)
+            .map(|i| {
+                let (base, access) = (base.clone(), access.clone());
+                tokio::spawn(async move { add_wall(&base, &access, 500 + i * 10).await })
+            })
+            .collect();
+        let status = put(
+            &base,
+            &id,
+            Some(&cookie),
+            Some(SITE),
+            Some("1"),
+            empty_project(),
+        )
+        .await
+        .status()
+        .as_u16();
+        // Calls made after the PUT answered: copies of the old and the new
+        // revision are both saving now.
+        calls.extend((0..6).map(|i| {
+            let (base, access) = (base.clone(), access.clone());
+            tokio::spawn(async move { add_wall(&base, &access, 700 + i * 10).await })
+        }));
+        let mut ok = 0_u64;
+        for call in calls {
+            if call.await.unwrap()["isError"] == false {
+                ok += 1;
+            }
+        }
+        let (revision, _) = stored(&state, &id).await;
+        let engine_walls = counts(&base, &access).await["walls"].as_u64().unwrap();
+        let stored_walls = walls_in_db(&base, &access, &id).await;
+        let put_kept = u64::from(status == 200);
+        assert_eq!(revision.cast_unsigned(), 1 + ok + put_kept, "round {round}");
+        assert_eq!(engine_walls, stored_walls, "round {round}: engine diverged");
+        let before_calls = if status == 200 { 0 } else { 4 };
+        assert_eq!(
+            stored_walls,
+            before_calls + ok,
+            "round {round}: status {status}"
+        );
+    }
 }

@@ -12,8 +12,9 @@
 //! - **one fixed MCP address**, `/mcp`, that reaches the account's own tab
 //!   when one is open and signed in.
 //!
-//! Secrets are stored only as hashes, and nothing of a drawing passes
-//! through the database: the tab still holds the project.
+//! Secrets are stored only as hashes. A project kept in the cloud is
+//! stored once, at a revision: the engine and the editor tab both save it
+//! back on the revision they loaded, and a save from a stale one is refused.
 
 pub mod account;
 pub mod accounts;
@@ -122,15 +123,19 @@ pub fn router(state: &AppState) -> Router {
     let site = Router::new()
         .route("/account/me", get(account::me))
         .route("/account/claim", post(account::claim))
-        .route("/account/projects/{id}", get(account::download))
+        .route(
+            "/account/projects/{id}",
+            get(account::download).put(account::upload),
+        )
         .layer(
             CorsLayer::new()
                 .allow_origin(origins)
                 .allow_credentials(true)
-                .allow_methods([Method::GET, Method::POST])
-                .allow_headers([header::CONTENT_TYPE])
-                // The editor names a cloud project by the file name it comes with.
-                .expose_headers([header::CONTENT_DISPOSITION]),
+                .allow_methods([Method::GET, Method::POST, Method::PUT])
+                .allow_headers([header::CONTENT_TYPE, account::REVISION])
+                // The editor names a cloud project by the file name it comes
+                // with, and saves it back on the revision it came at.
+                .expose_headers([header::CONTENT_DISPOSITION, account::REVISION]),
         );
     let cloud = Router::new()
         .route("/", get(home))

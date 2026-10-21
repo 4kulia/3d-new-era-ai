@@ -60,6 +60,43 @@ pub(crate) struct Held {
     asked_at: f64,
     /// Reconnections tried since the link was last up, for the backoff.
     retries: u32,
+    /// Whether the account took this tab's room: then the AI works here, and
+    /// the cloud project this tab opened is saved back from here.
+    claimed: bool,
+    /// The cloud project this tab opened, while the document is still it.
+    cloud: Option<Cloud>,
+    /// Counts the cloud projects bound, so an answer for one bound before is
+    /// told from one for the project bound now.
+    bound: u32,
+}
+
+/// A project this tab opened from the account's cloud, and how saving it
+/// back is going.
+#[derive(Debug)]
+struct Cloud {
+    url: String,
+    name: String,
+    serial: u32,
+    saver: crate::autosave::Autosave,
+    /// Why the changes are not saved, while they are not, and when the
+    /// status bar last said so: it says so again until a save goes through.
+    warning: Option<(String, f64)>,
+    /// What the window is to do or say about it, next frame.
+    said: Option<Said>,
+}
+
+/// What saving the cloud project back has for the window.
+#[derive(Debug)]
+pub(crate) enum Said {
+    /// Somebody saved the project since this tab loaded it: this tab's own
+    /// state went down as a backup, and this is the service's copy to open.
+    Reload {
+        name: String,
+        bytes: Vec<u8>,
+        revision: i64,
+    },
+    /// A line for the status bar.
+    Note(String),
 }
 
 /// The account the person in this tab is signed into, as the service said.
@@ -80,6 +117,7 @@ impl Held {
         if let Some(socket) = self.socket.take() {
             let _ = socket.close();
         }
+        self.claimed = false;
     }
 }
 
@@ -286,16 +324,21 @@ pub(crate) fn check_account(state: &Shared, ctx: &eframe::egui::Context) {
             // A relay with no accounts (404), or no answer: say nothing.
             _ => Account::Unknown,
         };
+        let mut claimed = false;
         if matches!(account, Account::In { .. }) {
             let claim = serde_json::json!({"room": kept.room, "tab_key": kept.tab_key}).to_string();
-            if !matches!(
+            claimed = matches!(
                 with_cookie(&format!("{base}/account/claim"), Some(&claim)).await,
                 Ok((200, _))
-            ) {
+            );
+            if !claimed {
                 web_sys::console::warn_1(&"could not hand this tab to the account".into());
             }
         }
-        state.borrow_mut().account = account;
+        let mut held = state.borrow_mut();
+        held.account = account;
+        held.claimed = claimed && matches!(held.link, Link::On { .. });
+        drop(held);
         ctx.request_repaint();
     });
 }
@@ -528,6 +571,7 @@ fn hold(
         let socket = socket.clone();
         let ctx = ctx.clone();
         let document = document.clone();
+        let state = state.clone();
         Closure::<dyn FnMut(web_sys::MessageEvent)>::new(move |event: web_sys::MessageEvent| {
             let Some(text) = event.data().as_string() else {
                 return;
@@ -562,6 +606,11 @@ fn hold(
                         .get("args")
                         .cloned()
                         .unwrap_or(serde_json::Value::Null);
+                    // An empty project in place of this one is no longer the
+                    // cloud project, and must not be saved over it.
+                    if name == "file" && args["action"] == "new" {
+                        unbind(&state);
+                    }
                     let (document, socket, ctx) = (document.clone(), socket.clone(), ctx.clone());
                     wasm_bindgen_futures::spawn_local(async move {
                         let diagnostic =
@@ -638,6 +687,264 @@ fn hold(
     };
     socket.set_onclose(Some(on_close.as_ref().unchecked_ref()));
     on_close.forget();
+}
+
+/// The cloud project the address bar opened (`?project=`), when it is one
+/// of the account's at this tab's service.
+fn cloud_url() -> Option<String> {
+    let url = web_sys::window()
+        .and_then(|w| w.location().search().ok())
+        .and_then(|search| web_sys::UrlSearchParams::new_with_str(&search).ok())
+        .and_then(|params| params.get("project"))?;
+    url.starts_with(&format!("{}/account/projects/", relay_base()))
+        .then_some(url)
+}
+
+/// The document is now the cloud project the address bar opened, named
+/// `name`, at the service's `revision`: from here on, while the account holds
+/// this tab's room, it is saved back after each change.
+pub(crate) fn bind(state: &Shared, name: &str, revision: i64, document_revision: u64) {
+    let Some(url) = cloud_url() else {
+        return;
+    };
+    let mut held = state.borrow_mut();
+    held.bound += 1;
+    held.cloud = Some(Cloud {
+        url,
+        name: name.to_owned(),
+        serial: held.bound,
+        saver: crate::autosave::Autosave::new(revision, document_revision, js_sys::Date::now()),
+        warning: None,
+        said: None,
+    });
+}
+
+/// The document is no longer the cloud project: nothing is saved back.
+pub(crate) fn unbind(state: &Shared) {
+    state.borrow_mut().cloud = None;
+}
+
+/// Saves the cloud project back when it is due, and answers what the window
+/// has to do about an earlier save. Runs every frame.
+pub(crate) fn autosave(
+    document: &SharedDocument,
+    ctx: &eframe::egui::Context,
+    state: &Shared,
+) -> Option<Said> {
+    let mut held = state.borrow_mut();
+    let holding = held.claimed && matches!(held.link, Link::On { .. });
+    let cloud = held.cloud.as_mut()?;
+    if let Some(said) = cloud.said.take() {
+        if matches!(said, Said::Reload { .. }) {
+            held.cloud = None;
+        }
+        return Some(said);
+    }
+    if !holding {
+        return None;
+    }
+    let now = js_sys::Date::now();
+    if let Some((text, at)) = cloud.warning.as_mut()
+        && now - *at >= WARNING_REPEAT_MS
+    {
+        *at = now;
+        return Some(Said::Note(text.clone()));
+    }
+    let doc = document.read();
+    let from = cloud.saver.due(doc.revision(), now)?;
+    let bytes = match newera_core::to_bundle_bytes(&doc) {
+        Ok(bytes) => bytes,
+        Err(why) => {
+            drop(doc);
+            return Some(refused(cloud, now, &why.to_string()));
+        }
+    };
+    drop(doc);
+    let (url, serial) = (cloud.url.clone(), cloud.serial);
+    drop(held);
+    let (document, ctx, state) = (document.clone(), ctx.clone(), state.clone());
+    wasm_bindgen_futures::spawn_local(async move {
+        let answer = put_project(&url, from, bytes).await;
+        let stale = {
+            let mut held = state.borrow_mut();
+            let Some(cloud) = held.cloud.as_mut().filter(|c| c.serial == serial) else {
+                return;
+            };
+            match answer {
+                Ok((200, Some(revision), _)) => {
+                    cloud.saver.saved(revision);
+                    cloud.warning = None;
+                    None
+                }
+                Ok((409, _, _)) => {
+                    cloud.saver.conflicted();
+                    Some(cloud.name.clone())
+                }
+                Ok((_, _, why)) | Err(why) => {
+                    cloud.said = Some(refused(cloud, js_sys::Date::now(), &why));
+                    None
+                }
+            }
+        };
+        if let Some(name) = stale {
+            keep_and_reload(&document, &state, serial, &url, &name).await;
+        }
+        ctx.request_repaint();
+    });
+    None
+}
+
+/// How long the status bar goes without repeating that changes are not
+/// saved: a little under the time a line stays on it.
+const WARNING_REPEAT_MS: f64 = 6000.0;
+
+/// A save did not go through: the next try waits, and the status bar says
+/// the changes are not saved until one does.
+fn refused(cloud: &mut Cloud, now: f64, why: &str) -> Said {
+    cloud.saver.failed(now);
+    let text = crate::i18n::fill("⚠ Não foi possível salvar: {}", &[&why]);
+    cloud.warning = Some((text.clone(), now));
+    Said::Note(text)
+}
+
+/// After a save refused as stale: this tab's state goes down as a `.newera`
+/// backup first, so no edit is lost, then the service's copy is fetched to
+/// open in its place. If either fails, saving goes back to its normal retry.
+async fn keep_and_reload(
+    document: &SharedDocument,
+    state: &Shared,
+    serial: u32,
+    url: &str,
+    name: &str,
+) {
+    let stem = name.strip_suffix(".newera").unwrap_or(name);
+    let revision = document.read().revision();
+    let owed = state
+        .borrow()
+        .cloud
+        .as_ref()
+        .filter(|c| c.serial == serial)
+        .is_none_or(|c| c.saver.needs_backup(revision));
+    let backup = if owed {
+        let made = newera_core::to_bundle_bytes(&document.read())
+            .map_err(|why| why.to_string())
+            .and_then(|bytes| {
+                crate::files::save_bytes(
+                    "New Era",
+                    "newera",
+                    &format!("{stem}-backup.newera"),
+                    || Ok(bytes),
+                )
+            });
+        if made.is_ok()
+            && let Some(cloud) = state
+                .borrow_mut()
+                .cloud
+                .as_mut()
+                .filter(|c| c.serial == serial)
+        {
+            cloud.saver.backed_up(revision);
+        }
+        made.map(|_| ())
+    } else {
+        Ok(())
+    };
+    let fetched = match backup {
+        Ok(()) => get_project(url).await.map_err(|why| {
+            crate::i18n::fill(
+                "⚠ O projeto mudou na nuvem e esta aba guardou uma cópia; a versão da nuvem não abriu: {}",
+                &[&why],
+            )
+        }),
+        Err(why) => Err(crate::i18n::fill("⚠ Não foi possível salvar: {}", &[&why])),
+    };
+    let mut held = state.borrow_mut();
+    let Some(cloud) = held.cloud.as_mut().filter(|c| c.serial == serial) else {
+        return;
+    };
+    match fetched {
+        Ok((name, bytes, revision)) => {
+            cloud.said = Some(Said::Reload {
+                name,
+                bytes,
+                revision,
+            });
+        }
+        Err(text) => {
+            let now = js_sys::Date::now();
+            cloud.saver.reload_failed(now);
+            cloud.warning = Some((text.clone(), now));
+            cloud.said = Some(Said::Note(text));
+        }
+    }
+}
+
+/// Sends the project on the revision it was loaded at. Answers the status,
+/// the revision the service kept it as, and what the service said.
+async fn put_project(
+    url: &str,
+    from: i64,
+    bytes: Vec<u8>,
+) -> Result<(u16, Option<i64>, String), String> {
+    let options = web_sys::RequestInit::new();
+    options.set_method("PUT");
+    options.set_mode(web_sys::RequestMode::Cors);
+    options.set_credentials(web_sys::RequestCredentials::Include);
+    options.set_body(&js_sys::Uint8Array::from(bytes.as_slice()).into());
+    let headers = web_sys::Headers::new().map_err(|e| told(&e))?;
+    headers
+        .set("x-project-revision", &from.to_string())
+        .map_err(|e| told(&e))?;
+    options.set_headers(&headers);
+    let response = fetch(url, &options).await?;
+    let status = response.status();
+    let text = wasm_bindgen_futures::JsFuture::from(response.text().map_err(|e| told(&e))?)
+        .await
+        .map_err(|e| told(&e))?
+        .as_string()
+        .unwrap_or_default();
+    let answer = serde_json::from_str::<serde_json::Value>(&text).unwrap_or_default();
+    let why = answer["error"]
+        .as_str()
+        .map_or_else(|| format!("the service said {status}"), str::to_owned);
+    Ok((status, answer["revision"].as_i64(), why))
+}
+
+/// The service's copy of the project: its file name, bytes and revision.
+async fn get_project(url: &str) -> Result<(String, Vec<u8>, i64), String> {
+    let options = web_sys::RequestInit::new();
+    options.set_mode(web_sys::RequestMode::Cors);
+    options.set_credentials(web_sys::RequestCredentials::Include);
+    let response = fetch(url, &options).await?;
+    if !response.ok() {
+        return Err(format!("the service said {}", response.status()));
+    }
+    let header = |name: &str| response.headers().get(name).ok().flatten();
+    let revision = header("x-project-revision")
+        .and_then(|r| r.parse().ok())
+        .ok_or("the service sent no revision")?;
+    let name = header("content-disposition")
+        .and_then(|d| {
+            d.split("filename=\"")
+                .nth(1)
+                .map(|n| n.trim_end_matches('"').to_owned())
+        })
+        .unwrap_or_else(|| "projeto.newera".to_owned());
+    let buffer =
+        wasm_bindgen_futures::JsFuture::from(response.array_buffer().map_err(|e| told(&e))?)
+            .await
+            .map_err(|e| told(&e))?;
+    Ok((name, js_sys::Uint8Array::new(&buffer).to_vec(), revision))
+}
+
+async fn fetch(url: &str, options: &web_sys::RequestInit) -> Result<web_sys::Response, String> {
+    let request = web_sys::Request::new_with_str_and_init(url, options).map_err(|e| told(&e))?;
+    let window = web_sys::window().ok_or("no window")?;
+    wasm_bindgen_futures::JsFuture::from(window.fetch_with_request(&request))
+        .await
+        .map_err(|e| told(&e))?
+        .dyn_into::<web_sys::Response>()
+        .map_err(|_| "an odd answer".to_owned())
 }
 
 /// Runs one tool in this tab's project.

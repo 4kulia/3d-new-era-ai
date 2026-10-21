@@ -31,7 +31,8 @@ impl log::Log for ConsoleLog {
 }
 
 /// Starts the editor in the canvas with id `canvas_id`, opening `bytes`
-/// (a `.newera` project named `name`) when given.
+/// (a `.newera` project named `name`) when given; `revision` is the cloud
+/// service's revision of it, for a project from the account's cloud.
 #[cfg(target_arch = "wasm32")]
 #[wasm_bindgen]
 pub async fn start(
@@ -39,6 +40,7 @@ pub async fn start(
     name: Option<String>,
     bytes: Option<Vec<u8>>,
     asked: Option<bool>,
+    revision: Option<String>,
 ) -> Result<(), JsValue> {
     use wasm_bindgen::JsCast;
     console_error_panic_hook::set_once();
@@ -51,7 +53,8 @@ pub async fn start(
         .ok_or_else(|| JsValue::from_str("canvas not found"))?
         .dyn_into::<web_sys::HtmlCanvasElement>()?;
     let project = bytes.map(|b| (name.unwrap_or_else(|| "projeto.newera".into()), b));
-    newera_app::start_web(canvas, project, asked.unwrap_or(false)).await
+    let revision = revision.and_then(|r| r.parse().ok());
+    newera_app::start_web(canvas, project, asked.unwrap_or(false), revision).await
 }
 
 /// Runs a bounded render in an isolated worker, reporting progress by message.

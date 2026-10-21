@@ -7,6 +7,8 @@ mod ai;
 #[cfg(target_arch = "wasm32")]
 mod ai_web;
 mod app;
+#[cfg(any(target_arch = "wasm32", test))]
+mod autosave;
 mod cabinets;
 mod dialogs;
 mod ergonomics;
@@ -102,7 +104,8 @@ fn app_icon() -> Option<std::sync::Arc<eframe::egui::IconData>> {
 }
 
 /// Starts the editor in a browser canvas, optionally with a project
-/// (`.newera` JSON or bundle bytes) already open.
+/// (`.newera` JSON or bundle bytes) already open — one of the account's cloud
+/// projects when `revision`, the service's revision of it, is given.
 ///
 /// # Errors
 /// When the canvas can't get a graphics context.
@@ -111,6 +114,7 @@ pub async fn start_web(
     canvas: web_sys::HtmlCanvasElement,
     project: Option<(String, Vec<u8>)>,
     asked: bool,
+    revision: Option<i64>,
 ) -> Result<(), wasm_bindgen::JsValue> {
     let document = SharedDocument::default();
     eframe::WebRunner::new()
@@ -133,8 +137,14 @@ pub async fn start_web(
                 // was already drawing here gets their own work back instead —
                 // unless the address asked for a project (a link from their
                 // AI, "open in the editor"), which is what they came for.
-                if let Some((name, bytes)) = project.filter(|_| asked || !app.restored) {
-                    app.open_bytes(&name, &bytes);
+                // A cloud project comes with its revision: the tab saves it back
+                // on that revision while the account holds its room.
+                if let Some((name, bytes)) = project.filter(|_| asked || !app.restored)
+                    && app.open_bytes(&name, &bytes)
+                    && let Some(revision) = revision
+                {
+                    let now = app.document.read().revision();
+                    ai_web::bind(&app.ai_link, &name, revision, now);
                 }
                 Ok(Box::new(app))
             }),
