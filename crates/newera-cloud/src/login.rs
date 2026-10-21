@@ -50,7 +50,10 @@ fn set_cookie(state: &AppState, name: &str, value: &str, max_age: i64) -> Header
 /// The account whose browser this is, if it is signed in.
 pub async fn signed_in(state: &AppState, headers: &HeaderMap) -> Option<accounts::Account> {
     let token = cookie(headers, SESSION)?;
-    accounts::session(&state.db, &token).await.ok().flatten()
+    accounts::session(&state.db, &state.config.allowed_emails, &token)
+        .await
+        .ok()
+        .flatten()
 }
 
 /// Where a sign-in may send the person after: a path on this service, or a
@@ -92,23 +95,9 @@ pub async fn form(
     if signed_in(&state, &headers).await.is_some() {
         return Redirect::to(&return_to).into_response();
     }
-    let google = state.config.google.as_ref().map_or_else(String::new, |_| {
-        format!(
-            r#"<a class="button ghost" href="/login/google?return_to={rt}">{label}</a>"#,
-            rt = escape(&url_encode(&return_to)),
-            label = lang.pick("Entrar com Google", "Continue with Google"),
-        )
-    });
+    let google = google_button(&state, lang, &return_to);
     if matches!(state.config.mail, crate::config::Mail::Off) {
-        let body = format!(
-            "<h1>{}</h1><p class=\"muted\">{}</p>{google}",
-            lang.pick("Entrar", "Sign in"),
-            lang.pick(
-                "O acesso por e-mail ainda não está disponível.",
-                "Signing in by email is not available yet."
-            ),
-        );
-        return page(lang, lang.pick("Entrar", "Sign in"), &body).into_response();
+        return email_unavailable(lang, &google);
     }
     let body = format!(
         r#"<h1>{title}</h1>
@@ -132,6 +121,30 @@ pub async fn form(
     page(lang, lang.pick("Entrar", "Sign in"), &body).into_response()
 }
 
+/// The "Continue with Google" button, when Google sign-in is set up.
+fn google_button(state: &AppState, lang: Lang, return_to: &str) -> String {
+    state.config.google.as_ref().map_or_else(String::new, |_| {
+        format!(
+            r#"<a class="button ghost" href="/login/google?return_to={rt}">{label}</a>"#,
+            rt = escape(&url_encode(return_to)),
+            label = lang.pick("Entrar com Google", "Continue with Google"),
+        )
+    })
+}
+
+/// The answer wherever email sign-in is asked for while it is not set up.
+fn email_unavailable(lang: Lang, google: &str) -> Response {
+    let body = format!(
+        "<h1>{}</h1><p class=\"muted\">{}</p>{google}",
+        lang.pick("Entrar", "Sign in"),
+        lang.pick(
+            "O acesso por e-mail ainda não está disponível.",
+            "Signing in by email is not available yet."
+        ),
+    );
+    page(lang, lang.pick("Entrar", "Sign in"), &body).into_response()
+}
+
 #[derive(Debug, Deserialize)]
 pub struct EmailForm {
     email: String,
@@ -145,6 +158,12 @@ pub async fn send(
     Form(f): Form<EmailForm>,
 ) -> Response {
     let lang = Lang::of(&headers);
+    // Without email sign-in every address gets this answer, ahead of any
+    // decision about the address: the page never tells which are let in.
+    if matches!(state.config.mail, crate::config::Mail::Off) {
+        let return_to = safe_return(&state, f.return_to.as_deref());
+        return email_unavailable(lang, &google_button(&state, lang, &return_to));
+    }
     let email = f.email.trim().to_owned();
     let plausible = email.len() <= 254
         && email.split_once('@').is_some_and(|(user, host)| {
@@ -190,39 +209,49 @@ pub async fn send(
         );
         return (StatusCode::TOO_MANY_REQUESTS, page(lang, "Sign in", &body)).into_response();
     }
+    // An address this installation does not let in gets no link, and the
+    // same answer as one it does: the page never tells which are let in.
+    if !state.config.allowed_emails.admits(&email) {
+        return sent(lang, &email);
+    }
+    // The insert and the send run apart from the answer: how long they take
+    // must not tell a listed address from one that is not, and whatever goes
+    // wrong in them is logged, not shown.
     let return_to = safe_return(&state, f.return_to.as_deref());
-    let token = secret::token();
-    let stored = sqlx::query(
-        "insert into login_links (token_hash, email, return_to, expires_at)
-         values ($1, $2, $3, now() + make_interval(mins => $4))",
-    )
-    .bind(secret::hash(&token))
-    .bind(&email)
-    .bind(&return_to)
-    .bind(LINK_MINUTES)
-    .execute(&state.db)
-    .await;
-    if let Err(err) = stored {
-        tracing::error!("login link: {err}");
-        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
-    }
-    let link = format!("{}/login/link?token={token}", state.config.public_url);
-    if let Err(err) =
-        mail::send_login_link(&state.http, &state.config.mail, &email, &link, lang).await
-    {
-        tracing::error!("sending the sign-in link: {err:#}");
-        let body = format!(
-            "<h1>{}</h1><p class=\"muted\">{}</p>",
-            lang.pick("Não conseguimos enviar", "We could not send it"),
-            lang.pick("Tente de novo daqui a pouco.", "Try again in a moment.")
-        );
-        return (StatusCode::BAD_GATEWAY, page(lang, "Sign in", &body)).into_response();
-    }
+    let page = sent(lang, &email);
+    tokio::spawn(async move {
+        let token = secret::token();
+        let stored = sqlx::query(
+            "insert into login_links (token_hash, email, return_to, expires_at)
+             values ($1, $2, $3, now() + make_interval(mins => $4))",
+        )
+        .bind(secret::hash(&token))
+        .bind(&email)
+        .bind(&return_to)
+        .bind(LINK_MINUTES)
+        .execute(&state.db)
+        .await;
+        if let Err(err) = stored {
+            tracing::error!("login link: {err}");
+            return;
+        }
+        let link = format!("{}/login/link?token={token}", state.config.public_url);
+        if let Err(err) =
+            mail::send_login_link(&state.http, &state.config.mail, &email, &link, lang).await
+        {
+            tracing::error!("sending the sign-in link: {err:#}");
+        }
+    });
+    page
+}
+
+/// "Check your email": the answer to a link asked for.
+fn sent(lang: Lang, email: &str) -> Response {
     let body = format!(
         "<h1>{}</h1><p>{} <b>{}</b>.</p><p class=\"muted\">{}</p>",
         lang.pick("Veja seu e-mail", "Check your email"),
         lang.pick("Mandamos um link para", "We sent a link to"),
-        escape(&email),
+        escape(email),
         lang.pick(
             "Ele vale por 15 minutos. Pode fechar esta página.",
             "It works for 15 minutes. You can close this page."
@@ -290,18 +319,33 @@ pub async fn redeem(
         );
         return (StatusCode::GONE, page(lang, "Sign in", &body)).into_response();
     };
-    finish(&state, &email, &return_to).await
+    finish(&state, lang, &email, &return_to).await
 }
 
 /// An address is proven: its account, a session, and on to where it was going.
-async fn finish(state: &AppState, email: &str, return_to: &str) -> Response {
-    let account = match accounts::find_or_create(&state.db, email).await {
-        Ok(account) => account,
-        Err(err) => {
-            tracing::error!("account for a sign-in: {err}");
-            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
-        }
-    };
+/// An address this installation does not let in stops here, whichever way it
+/// was proven.
+async fn finish(state: &AppState, lang: Lang, email: &str, return_to: &str) -> Response {
+    let account =
+        match accounts::find_or_create(&state.db, &state.config.allowed_emails, email).await {
+            Ok(Some(account)) => account,
+            Ok(None) => {
+                tracing::warn!("sign-in refused: the address is not one this installation lets in");
+                let body = format!(
+                    "<h1>{}</h1><p class=\"muted\">{}</p>",
+                    lang.pick("Acesso fechado", "Not open to you"),
+                    lang.pick(
+                        "Este endereço não pode entrar aqui.",
+                        "This address cannot sign in here."
+                    ),
+                );
+                return (StatusCode::FORBIDDEN, page(lang, "Sign in", &body)).into_response();
+            }
+            Err(err) => {
+                tracing::error!("account for a sign-in: {err}");
+                return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+            }
+        };
     let token = match accounts::open_session(&state.db, &account.id).await {
         Ok(token) => token,
         Err(err) => {
@@ -391,7 +435,7 @@ pub async fn google_callback(
     let email = async {
         let tokens: serde_json::Value = state
             .http
-            .post("https://oauth2.googleapis.com/token")
+            .post(&google.token_url)
             .form(&[
                 ("code", code.as_str()),
                 ("client_id", google.client_id.as_str()),
@@ -412,7 +456,7 @@ pub async fn google_callback(
             .ok_or_else(|| anyhow::anyhow!("no access token from Google"))?;
         let info: serde_json::Value = state
             .http
-            .get("https://openidconnect.googleapis.com/v1/userinfo")
+            .get(&google.userinfo_url)
             .bearer_auth(access)
             .send()
             .await?
@@ -430,7 +474,7 @@ pub async fn google_callback(
     .await;
     match email {
         Ok(email) => {
-            let mut response = finish(&state, &email, &return_to).await;
+            let mut response = finish(&state, Lang::of(&headers), &email, &return_to).await;
             response
                 .headers_mut()
                 .append(header::SET_COOKIE, set_cookie(&state, GOOGLE_STATE, "", 0));

@@ -15,11 +15,20 @@ pub enum Mail {
     Off,
 }
 
+/// Where Google trades a sign-in's code for an access token.
+pub const GOOGLE_TOKEN_URL: &str = "https://oauth2.googleapis.com/token";
+/// Where Google says whose the access token is.
+pub const GOOGLE_USERINFO_URL: &str = "https://openidconnect.googleapis.com/v1/userinfo";
+
 /// Google as a way to sign in, when configured.
 #[derive(Clone)]
 pub struct Google {
     pub client_id: String,
     pub client_secret: String,
+    /// [`GOOGLE_TOKEN_URL`], or a stand-in for it in the tests.
+    pub token_url: String,
+    /// [`GOOGLE_USERINFO_URL`], or a stand-in for it in the tests.
+    pub userinfo_url: String,
 }
 
 // Secrets stay out of logs and panics.
@@ -124,6 +133,64 @@ impl std::fmt::Debug for BuyMeACoffee {
     }
 }
 
+/// Who may hold an account here, from `NEWERA_ALLOWED_EMAILS`: anyone, or
+/// only the addresses listed — an installation that is someone's own. The
+/// listed addresses are its owners, on the `owner` plan.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct AllowedEmails(Option<Vec<String>>);
+
+impl AllowedEmails {
+    /// Reads a comma-separated list; `None` lets anyone in.
+    ///
+    /// # Errors
+    ///
+    /// When the list is given but names no address: that would let nobody
+    /// in, which is never what was meant.
+    pub fn parse(list: Option<&str>) -> anyhow::Result<Self> {
+        let Some(list) = list else {
+            return Ok(Self(None));
+        };
+        let emails: Vec<String> = list
+            .split(',')
+            .map(|e| e.trim().to_lowercase())
+            .filter(|e| !e.is_empty())
+            .collect();
+        anyhow::ensure!(!emails.is_empty(), "NEWERA_ALLOWED_EMAILS names no address");
+        Ok(Self(Some(emails)))
+    }
+
+    /// Reads the variable as the environment gave it (the seam under
+    /// `Config::from_env`).
+    ///
+    /// # Errors
+    ///
+    /// When the variable is present but names no address, or is not text.
+    pub fn from_var(value: Result<String, std::env::VarError>) -> anyhow::Result<Self> {
+        match value {
+            Ok(list) => Self::parse(Some(&list)),
+            Err(std::env::VarError::NotPresent) => Self::parse(None),
+            Err(err) => Err(anyhow::Error::new(err).context("NEWERA_ALLOWED_EMAILS")),
+        }
+    }
+
+    /// The addresses listed, lower-cased; `None` when anyone is let in.
+    pub fn list(&self) -> Option<&[String]> {
+        self.0.as_deref()
+    }
+
+    /// Whether this address may sign in and hold an account.
+    pub fn admits(&self, email: &str) -> bool {
+        self.0.is_none() || self.lists(email)
+    }
+
+    /// Whether this address is one of those listed.
+    pub fn lists(&self, email: &str) -> bool {
+        self.0
+            .as_ref()
+            .is_some_and(|list| list.contains(&email.trim().to_lowercase()))
+    }
+}
+
 #[derive(Clone)]
 pub struct Config {
     /// Where this service is reached, without a trailing slash, e.g.
@@ -141,6 +208,8 @@ pub struct Config {
     /// The paid plan, supported through Buy Me a Coffee; `None` leaves every
     /// account on the free plan and the account page without a way to pay.
     pub buymeacoffee: Option<BuyMeACoffee>,
+    /// Who may sign in; by default, anyone.
+    pub allowed_emails: AllowedEmails,
     /// The port to listen on, on every interface of the container; the
     /// Cloudflare tunnel in front is what reaches it.
     pub port: u16,
@@ -156,6 +225,7 @@ impl std::fmt::Debug for Config {
             .field("google", &self.google)
             .field("editor_url", &self.editor_url)
             .field("buymeacoffee", &self.buymeacoffee)
+            .field("allowed_emails", &self.allowed_emails)
             .field("port", &self.port)
             .finish()
     }
@@ -198,12 +268,15 @@ impl Config {
             (Some(client_id), Some(client_secret)) => Some(Google {
                 client_id,
                 client_secret,
+                token_url: GOOGLE_TOKEN_URL.to_owned(),
+                userinfo_url: GOOGLE_USERINFO_URL.to_owned(),
             }),
             _ => None,
         };
         let editor_url =
             var("NEWERA_EDITOR_URL").unwrap_or_else(|| "https://3dneweraai.com/app/".to_owned());
         let buymeacoffee = BuyMeACoffee::from_env(&var)?;
+        let allowed_emails = AllowedEmails::from_var(std::env::var("NEWERA_ALLOWED_EMAILS"))?;
         let port = var("PORT")
             .map(|p| p.parse().context("PORT"))
             .transpose()?
@@ -216,6 +289,7 @@ impl Config {
             google,
             editor_url,
             buymeacoffee,
+            allowed_emails,
             port,
         })
     }
@@ -224,5 +298,59 @@ impl Config {
     /// for local testing.
     pub fn secure_cookies(&self) -> bool {
         self.public_url.starts_with("https://")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_list_is_trimmed_and_ignores_case() {
+        let allowed = AllowedEmails::parse(Some(" Ana@Example.com ,bo@example.com,")).unwrap();
+        assert_eq!(
+            allowed,
+            AllowedEmails(Some(vec![
+                "ana@example.com".to_owned(),
+                "bo@example.com".to_owned()
+            ]))
+        );
+        assert!(allowed.admits(" ANA@example.COM"));
+        assert!(allowed.lists("bo@EXAMPLE.com"));
+        assert!(!allowed.admits("cy@example.com"));
+        assert!(!allowed.lists("cy@example.com"));
+    }
+
+    #[test]
+    fn no_list_lets_anyone_in_and_lists_nobody() {
+        let anyone = AllowedEmails::parse(None).unwrap();
+        assert!(anyone.admits("cy@example.com"));
+        assert!(!anyone.lists("cy@example.com"));
+    }
+
+    #[test]
+    fn a_variable_present_but_naming_no_address_is_refused() {
+        use std::env::VarError;
+        for blank in ["", "   ", " , ,", ","] {
+            assert!(
+                AllowedEmails::from_var(Ok(blank.to_owned())).is_err(),
+                "{blank:?}"
+            );
+        }
+        assert!(AllowedEmails::from_var(Err(VarError::NotUnicode("x".into()))).is_err());
+        assert_eq!(
+            AllowedEmails::from_var(Err(VarError::NotPresent)).unwrap(),
+            AllowedEmails::default()
+        );
+        assert!(
+            AllowedEmails::from_var(Ok("a@b.co".to_owned()))
+                .unwrap()
+                .lists("a@b.co")
+        );
+    }
+
+    #[test]
+    fn a_list_naming_no_address_is_refused() {
+        assert!(AllowedEmails::parse(Some(" , ")).is_err());
     }
 }

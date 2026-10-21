@@ -49,6 +49,21 @@ pub struct AppState {
 }
 
 impl AppState {
+    /// The state at startup: the database brought in line with the list of
+    /// addresses the installation lets in, then the state for it.
+    ///
+    /// # Errors
+    ///
+    /// When the database fails.
+    ///
+    /// # Panics
+    ///
+    /// As `new`.
+    pub async fn start(config: Config, db: PgPool) -> sqlx::Result<Self> {
+        accounts::sync_given_plan(&db, &config.allowed_emails).await?;
+        Ok(Self::new(config, db))
+    }
+
     /// The state for a configuration and a database already migrated.
     ///
     /// # Panics

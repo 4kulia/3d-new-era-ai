@@ -3,6 +3,7 @@
 use serde::Serialize;
 use sqlx::PgPool;
 
+use crate::config::AllowedEmails;
 use crate::secret;
 
 /// How long a browser stays signed in.
@@ -23,13 +24,74 @@ pub struct Plan {
     pub limits: serde_json::Value,
 }
 
+/// The plan of the addresses an installation lets in, when it lets in only
+/// those it lists.
+pub const OWNER_PLAN: &str = "owner";
+
 /// The account for an address, made the first time the address signs in.
+/// `None` when the address may not hold one here; an address `allowed`
+/// lists is put on the owner plan.
+///
+/// Every account is made here, so this is what keeps an installation that
+/// is someone's own to its owners, whichever way an address arrives.
 ///
 /// # Errors
 ///
 /// When the database fails.
-pub async fn find_or_create(db: &PgPool, email: &str) -> sqlx::Result<Account> {
+pub async fn find_or_create(
+    db: &PgPool,
+    allowed: &AllowedEmails,
+    email: &str,
+) -> sqlx::Result<Option<Account>> {
     let email = email.trim();
+    if !allowed.admits(email) {
+        return Ok(None);
+    }
+    let account = find_or_insert(db, email).await?;
+    if allowed.lists(email) {
+        sqlx::query(
+            "update accounts set given_plan = $2
+             where id = $1 and given_plan is distinct from $2",
+        )
+        .bind(&account.id)
+        .bind(OWNER_PLAN)
+        .execute(db)
+        .await?;
+    }
+    Ok(Some(account))
+}
+
+/// Brings the plans given by the installation in line with its list: the
+/// accounts it lists hold the owner plan, and an account holding it that is
+/// no longer listed (or when there is no list) does not.
+///
+/// # Errors
+///
+/// When the database fails.
+pub async fn sync_given_plan(db: &PgPool, allowed: &AllowedEmails) -> sqlx::Result<()> {
+    let listed = allowed.list().unwrap_or_default().to_vec();
+    let mut tx = db.begin().await?;
+    sqlx::query(
+        "update accounts set given_plan = $2
+         where deleted_at is null and lower(email) = any($1)
+           and given_plan is distinct from $2",
+    )
+    .bind(&listed)
+    .bind(OWNER_PLAN)
+    .execute(&mut *tx)
+    .await?;
+    sqlx::query(
+        "update accounts set given_plan = null
+         where given_plan = $2 and not (lower(email) = any($1))",
+    )
+    .bind(&listed)
+    .bind(OWNER_PLAN)
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await
+}
+
+async fn find_or_insert(db: &PgPool, email: &str) -> sqlx::Result<Account> {
     if let Some(found) = sqlx::query_as::<_, Account>(
         "select id, email from accounts where lower(email) = lower($1) and deleted_at is null",
     )
@@ -95,7 +157,8 @@ pub async fn get(db: &PgPool, id: &str) -> sqlx::Result<Option<Account>> {
     .await
 }
 
-/// The plan that applies now: an active subscription's, else the free one.
+/// The plan that applies now: the one the installation gave the account,
+/// else an active subscription's, else the free one.
 ///
 /// # Errors
 ///
@@ -104,6 +167,8 @@ pub async fn plan_of(db: &PgPool, account_id: &str) -> sqlx::Result<Plan> {
     let row: (String, String, serde_json::Value) = sqlx::query_as(
         "select p.code, p.name, p.limits from plans p
          where p.code = coalesce((
+             select a.given_plan from accounts a where a.id = $1
+         ), (
              select s.plan from subscriptions s
              where s.account_id = $1
                and s.status in ('active', 'trialing')
@@ -139,17 +204,24 @@ pub async fn open_session(db: &PgPool, account_id: &str) -> sqlx::Result<String>
     Ok(token)
 }
 
-/// The account a browser's cookie belongs to, if it is still good.
+/// The account a browser's cookie belongs to, if it is still good and the
+/// installation still lets its address in.
 ///
 /// # Errors
 ///
 /// When the database fails.
-pub async fn session(db: &PgPool, token: &str) -> sqlx::Result<Option<Account>> {
+pub async fn session(
+    db: &PgPool,
+    allowed: &AllowedEmails,
+    token: &str,
+) -> sqlx::Result<Option<Account>> {
     sqlx::query_as::<_, Account>(
         "select a.id, a.email from sessions s join accounts a on a.id = s.account_id
-         where s.token_hash = $1 and s.expires_at > now() and a.deleted_at is null",
+         where s.token_hash = $1 and s.expires_at > now() and a.deleted_at is null
+           and ($2::text[] is null or lower(a.email) = any($2))",
     )
     .bind(secret::hash(token))
+    .bind(allowed.list())
     .fetch_optional(db)
     .await
 }

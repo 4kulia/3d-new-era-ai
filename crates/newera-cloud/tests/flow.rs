@@ -8,7 +8,8 @@
 
 use base64::Engine as _;
 use futures_util::{SinkExt, StreamExt};
-use newera_cloud::{AppState, Config, config::Mail, secret};
+use newera_cloud::config::{AllowedEmails, Google, Mail};
+use newera_cloud::{AppState, Config, secret};
 use serde_json::{Value, json};
 use sha2::Digest as _;
 
@@ -26,6 +27,27 @@ async fn service() -> Option<(String, AppState)> {
 
 /// The same, with the editor served from `sites`.
 async fn service_for(sites: Vec<String>) -> Option<(String, AppState)> {
+    service_with(sites, AllowedEmails::default(), None).await
+}
+
+/// The same, letting in only `allowed`, and signing in with `google` too.
+async fn service_with(
+    sites: Vec<String>,
+    allowed: AllowedEmails,
+    google: Option<Google>,
+) -> Option<(String, AppState)> {
+    service_full(sites, allowed, google, Mail::Log, None).await
+}
+
+/// The same, with the way sign-in links are sent, and the HTTP client the
+/// service sends them with, chosen.
+async fn service_full(
+    sites: Vec<String>,
+    allowed: AllowedEmails,
+    google: Option<Google>,
+    mail: Mail,
+    http: Option<reqwest::Client>,
+) -> Option<(String, AppState)> {
     let Ok(admin) = std::env::var("TEST_DATABASE_URL") else {
         eprintln!("TEST_DATABASE_URL not set: skipping");
         return None;
@@ -51,8 +73,8 @@ async fn service_for(sites: Vec<String>) -> Option<(String, AppState)> {
         public_url: base.clone(),
         database_url: url,
         site_origins: sites,
-        mail: Mail::Log,
-        google: None,
+        mail,
+        google,
         editor_url: format!("{SITE}/editor/"),
         buymeacoffee: Some(newera_cloud::config::BuyMeACoffee {
             page: BMC_PAGE.to_owned(),
@@ -60,9 +82,13 @@ async fn service_for(sites: Vec<String>) -> Option<(String, AppState)> {
             levels: vec![7],
             test_events: false,
         }),
+        allowed_emails: allowed,
         port: 0,
     };
-    let state = AppState::new(config, db);
+    let mut state = AppState::start(config, db).await.expect("startup");
+    if let Some(http) = http {
+        state.http = http;
+    }
     let app = newera_cloud::router(&state);
     tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
     Some((base, state))
@@ -119,6 +145,22 @@ async fn sign_in(base: &str, state: &AppState, email: &str, return_to: &str) -> 
         .await
         .unwrap();
     assert_eq!(asked.status(), 200, "the link is sent");
+    // The link is stored after the answer: wait for the row.
+    let mut stored = 0_i64;
+    for _ in 0..50 {
+        stored = sqlx::query_scalar(
+            "select count(*) from login_links where email = $1 and used_at is null",
+        )
+        .bind(email)
+        .fetch_one(&state.db)
+        .await
+        .unwrap();
+        if stored > 0 {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    assert!(stored > 0, "no login link stored for {email} within 5 s");
     // The log carries the link; the test reads the row instead and swaps in a
     // token it knows (only the hash is stored).
     let token = secret::token();
@@ -870,9 +912,11 @@ async fn a_membership_raises_the_plan_and_its_end_lowers_it() {
     let plan = |email: &'static str| {
         let db = state.db.clone();
         async move {
-            let account = newera_cloud::accounts::find_or_create(&db, email)
-                .await
-                .unwrap();
+            let account =
+                newera_cloud::accounts::find_or_create(&db, &AllowedEmails::default(), email)
+                    .await
+                    .unwrap()
+                    .expect("anyone is let in");
             newera_cloud::accounts::plan_of(&db, &account.id)
                 .await
                 .unwrap()
@@ -1200,4 +1244,642 @@ async fn the_account_page_sends_people_to_buy_me_a_coffee_and_back() {
     .await
     .unwrap();
     assert_eq!(live, 0, "a closed account is not reopened by a payment");
+}
+
+/// An installation that is someone's own, letting in the two addresses its
+/// list names, written the way a person types them.
+async fn owned_service() -> Option<(String, AppState)> {
+    let allowed = AllowedEmails::parse(Some(" Owner@Example.com , partner@example.com,"))
+        .expect("a list of addresses");
+    service_with(vec![SITE.to_owned()], allowed, Some(google().await)).await
+}
+
+/// Google, stood in for on a local port: the code a sign-in brings back is
+/// the address Google vouches for, verified.
+async fn google() -> Google {
+    use axum::routing::{get, post};
+    let stand_in = axum::Router::new()
+        .route(
+            "/token",
+            post(
+                |axum::Form(form): axum::Form<std::collections::HashMap<String, String>>| async move {
+                    assert_eq!(form["grant_type"], "authorization_code");
+                    assert_eq!(form["client_id"], "test-client");
+                    axum::Json(json!({"access_token": form["code"]}))
+                },
+            ),
+        )
+        .route(
+            "/userinfo",
+            get(|headers: axum::http::HeaderMap| async move {
+                let email = headers["authorization"]
+                    .to_str()
+                    .unwrap()
+                    .strip_prefix("Bearer ")
+                    .unwrap()
+                    .to_owned();
+                axum::Json(json!({"email": email, "email_verified": true}))
+            }),
+        );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let at = format!("http://{}", listener.local_addr().unwrap());
+    tokio::spawn(async move { axum::serve(listener, stand_in).await.unwrap() });
+    Google {
+        client_id: "test-client".to_owned(),
+        client_secret: "test-secret".to_owned(),
+        token_url: format!("{at}/token"),
+        userinfo_url: format!("{at}/userinfo"),
+    }
+}
+
+/// Signs in with Google as `email`: off to Google, and back with its code.
+/// The answer to the return trip, and the session cookie it set, if any.
+async fn google_sign_in(base: &str, email: &str) -> (u16, Option<String>) {
+    let http = client();
+    let off = http
+        .get(format!("{base}/login/google?return_to=/account"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(off.status(), 303);
+    let nonce = param(&location(&off), "state").expect("a state");
+    let query = url::form_urlencoded::Serializer::new(String::new())
+        .append_pair("code", email)
+        .append_pair("state", &nonce)
+        .finish();
+    let back = http
+        .get(format!("{base}/login/google/callback?{query}"))
+        .header("cookie", set_cookie(&off))
+        .send()
+        .await
+        .unwrap();
+    let session = back
+        .headers()
+        .get_all("set-cookie")
+        .iter()
+        .filter_map(|v| v.to_str().ok())
+        .find(|v| v.starts_with("newera_session="))
+        .map(|v| v.split(';').next().unwrap().to_owned());
+    if back.status() == 303 {
+        assert_eq!(location(&back), "/account");
+    }
+    (back.status().as_u16(), session)
+}
+
+/// The plan of an installation's owners.
+fn owner_plan() -> Value {
+    json!({
+        "code": "owner",
+        "name": "Owner",
+        "limits": {
+            "draft_renders_per_day": 1_000_000,
+            "hq_renders_per_month": 1_000_000,
+            "projects": 1_000_000,
+            "storage_mb": 1_000_000,
+        },
+    })
+}
+
+/// The plan of everyone else.
+fn free_plan() -> Value {
+    json!({
+        "code": "free",
+        "name": "Free",
+        "limits": {
+            "draft_renders_per_day": 20,
+            "hq_renders_per_month": 0,
+            "projects": 3,
+            "storage_mb": 50,
+        },
+    })
+}
+
+/// What `/account/me` says about the browser holding `cookie`.
+async fn me(base: &str, cookie: &str) -> Value {
+    client()
+        .get(format!("{base}/account/me"))
+        .header("cookie", cookie)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap()
+}
+
+async fn count(state: &AppState, sql: &'static str, email: &str) -> i64 {
+    sqlx::query_scalar(sql)
+        .bind(email)
+        .fetch_one(&state.db)
+        .await
+        .unwrap()
+}
+
+/// A sign-in link for `email` that nobody asked `/login` for, such as one
+/// sent before the list was set.
+async fn planted_link(state: &AppState, email: &str) -> String {
+    let token = secret::token();
+    sqlx::query(
+        "insert into login_links (token_hash, email, return_to, expires_at)
+         values ($1, $2, '/account', now() + interval '15 minutes')",
+    )
+    .bind(secret::hash(&token))
+    .bind(email)
+    .execute(&state.db)
+    .await
+    .unwrap();
+    token
+}
+
+#[tokio::test]
+async fn a_listed_address_signs_in_on_the_owner_plan() {
+    let Some((base, state)) = owned_service().await else {
+        return;
+    };
+    let owner_plan = owner_plan();
+    // Made on its first sign-in, in whatever case the person types it.
+    let (cookie, _) = sign_in(&base, &state, "OWNER@example.com", "/account").await;
+    assert_eq!(
+        me(&base, &cookie).await,
+        json!({
+            "signed_in": true,
+            "email": "OWNER@example.com",
+            "plan": owner_plan,
+            "mcp_url": format!("{base}/mcp"),
+        })
+    );
+    // An account that was here before the list, on the free plan, is moved
+    // onto the owner plan when it signs in.
+    sqlx::query("insert into accounts (id, email) values ($1, 'partner@example.com')")
+        .bind(secret::id())
+        .execute(&state.db)
+        .await
+        .unwrap();
+    let (cookie, _) = sign_in(&base, &state, "partner@example.com", "/account").await;
+    assert_eq!(me(&base, &cookie).await["plan"], owner_plan);
+    // A membership the owner also pays for does not lower the plan.
+    assert_eq!(
+        bmc(
+            &base,
+            "membership.started",
+            membership(6, "partner@example.com", "active", false, 7),
+            true,
+            true
+        )
+        .await,
+        200
+    );
+    assert_eq!(me(&base, &cookie).await["plan"], owner_plan);
+    assert_eq!(
+        count(
+            &state,
+            "select count(*) from accounts where lower(email) = $1",
+            "partner@example.com"
+        )
+        .await,
+        1,
+        "the account it had, not a second one"
+    );
+}
+
+#[tokio::test]
+async fn an_unlisted_address_gets_no_link_and_no_account() {
+    let Some((base, state)) = owned_service().await else {
+        return;
+    };
+    let http = client();
+    let ask = |email: &'static str| {
+        let (http, base) = (http.clone(), base.clone());
+        async move {
+            let response = http
+                .post(format!("{base}/login"))
+                .form(&[("email", email), ("return_to", "/account")])
+                .send()
+                .await
+                .unwrap();
+            (response.status().as_u16(), response.text().await.unwrap())
+        }
+    };
+    // The page says the same as for a listed address: nothing tells which
+    // addresses are let in.
+    let (status, page) = ask("stranger@example.com").await;
+    let (listed_status, listed_page) = ask("owner@example.com").await;
+    assert_eq!((status, listed_status), (200, 200));
+    assert_eq!(
+        page,
+        listed_page.replace("owner@example.com", "stranger@example.com")
+    );
+    let links = "select count(*) from login_links where email = $1";
+    assert_eq!(
+        count(&state, links, "stranger@example.com").await,
+        0,
+        "no link"
+    );
+    assert_eq!(count(&state, links, "owner@example.com").await, 1);
+
+    // A proven address that is not listed still opens nothing.
+    let token = planted_link(&state, "stranger@example.com").await;
+    let refused = http
+        .post(format!("{base}/login/link"))
+        .form(&[("token", token.as_str())])
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(refused.status(), 403);
+    assert!(refused.headers().get("set-cookie").is_none(), "no session");
+
+    // Nor does a payment for one.
+    assert_eq!(
+        bmc(
+            &base,
+            "membership.started",
+            membership(5, "stranger@example.com", "active", false, 7),
+            true,
+            true
+        )
+        .await,
+        200
+    );
+    assert_eq!(
+        count(
+            &state,
+            "select count(*) from accounts where lower(email) = $1",
+            "stranger@example.com"
+        )
+        .await,
+        0,
+        "no account by any route"
+    );
+}
+
+#[tokio::test]
+async fn without_a_list_anyone_signs_in_on_the_free_plan() {
+    let Some((base, state)) = service().await else {
+        return;
+    };
+    let (cookie, _) = sign_in(&base, &state, "stranger@example.com", "/account").await;
+    assert_eq!(me(&base, &cookie).await["plan"], free_plan());
+}
+
+#[tokio::test]
+async fn a_listed_address_signs_in_with_google_on_the_owner_plan() {
+    let Some((base, state)) = owned_service().await else {
+        return;
+    };
+    let (status, cookie) = google_sign_in(&base, "OWNER@example.com").await;
+    assert_eq!(status, 303);
+    assert_eq!(
+        me(&base, &cookie.expect("a session")).await,
+        json!({
+            "signed_in": true,
+            "email": "OWNER@example.com",
+            "plan": owner_plan(),
+            "mcp_url": format!("{base}/mcp"),
+        })
+    );
+    // An account that was here before the list is moved onto the owner plan.
+    sqlx::query("insert into accounts (id, email) values ($1, 'partner@example.com')")
+        .bind(secret::id())
+        .execute(&state.db)
+        .await
+        .unwrap();
+    let (status, cookie) = google_sign_in(&base, "partner@example.com").await;
+    assert_eq!(status, 303);
+    assert_eq!(
+        me(&base, &cookie.expect("a session")).await["plan"],
+        owner_plan()
+    );
+    assert_eq!(
+        count(
+            &state,
+            "select count(*) from accounts where lower(email) = $1",
+            "partner@example.com"
+        )
+        .await,
+        1,
+        "the account it had, not a second one"
+    );
+}
+
+#[tokio::test]
+async fn google_vouching_for_an_unlisted_address_opens_nothing() {
+    let Some((base, state)) = owned_service().await else {
+        return;
+    };
+    let (status, cookie) = google_sign_in(&base, "stranger@example.com").await;
+    assert_eq!((status, cookie), (403, None), "refused, no session");
+    assert_eq!(
+        count(
+            &state,
+            "select count(*) from accounts where lower(email) = $1",
+            "stranger@example.com"
+        )
+        .await,
+        0,
+        "no account"
+    );
+}
+
+#[tokio::test]
+async fn without_a_list_anyone_signs_in_with_google_on_the_free_plan() {
+    let Some((base, _state)) = service_with(
+        vec![SITE.to_owned()],
+        AllowedEmails::default(),
+        Some(google().await),
+    )
+    .await
+    else {
+        return;
+    };
+    let (status, cookie) = google_sign_in(&base, "stranger@example.com").await;
+    assert_eq!(status, 303);
+    assert_eq!(
+        me(&base, &cookie.expect("a session")).await["plan"],
+        free_plan()
+    );
+}
+
+/// The service started again over the same database, with another list.
+async fn restart(state: &AppState, allowed: AllowedEmails) -> (String, AppState) {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let mut config = (*state.config).clone();
+    config.public_url = base.clone();
+    config.allowed_emails = allowed;
+    let again = AppState::start(config, state.db.clone())
+        .await
+        .expect("startup");
+    let app = newera_cloud::router(&again);
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    (base, again)
+}
+
+fn list_of(addresses: &str) -> AllowedEmails {
+    AllowedEmails::parse(Some(addresses)).expect("a list of addresses")
+}
+
+async fn plan_code(state: &AppState, email: &str) -> String {
+    let id: String = sqlx::query_scalar("select id from accounts where lower(email) = $1")
+        .bind(email)
+        .fetch_one(&state.db)
+        .await
+        .unwrap();
+    newera_cloud::accounts::plan_of(&state.db, &id)
+        .await
+        .unwrap()
+        .code
+}
+
+async fn account_with(state: &AppState, email: &str) {
+    sqlx::query("insert into accounts (id, email) values ($1, $2)")
+        .bind(secret::id())
+        .bind(email)
+        .execute(&state.db)
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn startup_gives_the_owner_plan_to_the_listed_and_takes_it_from_the_rest() {
+    let Some((_, state)) = service().await else {
+        return;
+    };
+    account_with(&state, "owner@example.com").await;
+    account_with(&state, "stranger@example.com").await;
+    assert_eq!(plan_code(&state, "owner@example.com").await, "free");
+
+    // Started with a list: the listed account is an owner without signing in.
+    let (_, state) = restart(&state, list_of("Owner@Example.com")).await;
+    assert_eq!(plan_code(&state, "owner@example.com").await, "owner");
+    assert_eq!(plan_code(&state, "stranger@example.com").await, "free");
+
+    // Started with the address gone from the list: no longer an owner.
+    let (_, state) = restart(&state, list_of("partner@example.com")).await;
+    assert_eq!(plan_code(&state, "owner@example.com").await, "free");
+
+    // Listed again, the address holds it.
+    let (_, state) = restart(&state, list_of("owner@example.com")).await;
+    assert_eq!(plan_code(&state, "owner@example.com").await, "owner");
+
+    // And with no list at all, nobody holds it.
+    let (_, state) = restart(&state, AllowedEmails::default()).await;
+    assert_eq!(plan_code(&state, "owner@example.com").await, "free");
+}
+
+/// What an account that has been signed in holds: a browser cookie, an MCP
+/// access token and a refresh token.
+async fn credentials(base: &str, state: &AppState, email: &str) -> (String, String, String) {
+    let (cookie, _) = sign_in(base, state, email, "/account").await;
+    let id: String = sqlx::query_scalar("select id from accounts where lower(email) = lower($1)")
+        .bind(email)
+        .fetch_one(&state.db)
+        .await
+        .unwrap();
+    let (access, refresh) = (secret::token(), secret::token());
+    for (token, kind, days) in [(&access, "access", 1), (&refresh, "refresh", 30)] {
+        sqlx::query(
+            "insert into oauth_tokens (token_hash, kind, client_id, account_id, scope, family, expires_at)
+             values ($1, $2, 'test-client', $3, 'newera', $4, now() + make_interval(days => $5))",
+        )
+        .bind(secret::hash(token))
+        .bind(kind)
+        .bind(&id)
+        .bind(format!("family-{kind}-{email}"))
+        .bind(days)
+        .execute(&state.db)
+        .await
+        .unwrap();
+    }
+    (cookie, access, refresh)
+}
+
+async fn ping(base: &str, access: &str) -> u16 {
+    mcp(
+        base,
+        access,
+        json!({"jsonrpc": "2.0", "id": 1, "method": "ping"}),
+    )
+    .await
+    .0
+}
+
+async fn refresh_status(base: &str, refresh: &str) -> u16 {
+    client()
+        .post(format!("{base}/oauth/token"))
+        .form(&[
+            ("grant_type", "refresh_token"),
+            ("refresh_token", refresh),
+            ("client_id", "test-client"),
+        ])
+        .send()
+        .await
+        .unwrap()
+        .status()
+        .as_u16()
+}
+
+#[tokio::test]
+async fn an_unlisted_account_loses_its_browser_session_when_a_list_is_set() {
+    let Some((base, state)) = service().await else {
+        return;
+    };
+    let (stranger, ..) = credentials(&base, &state, "stranger@example.com").await;
+    let (owner, ..) = credentials(&base, &state, "owner@example.com").await;
+    assert_eq!(me(&base, &stranger).await["signed_in"], true);
+
+    let (base, _) = restart(&state, list_of("owner@example.com")).await;
+    assert_eq!(me(&base, &stranger).await["signed_in"], false);
+    assert_eq!(me(&base, &owner).await["signed_in"], true);
+}
+
+#[tokio::test]
+async fn an_unlisted_account_loses_its_access_token_when_a_list_is_set() {
+    let Some((base, state)) = service().await else {
+        return;
+    };
+    let (_, stranger, _) = credentials(&base, &state, "stranger@example.com").await;
+    let (_, owner, _) = credentials(&base, &state, "owner@example.com").await;
+    assert_eq!(ping(&base, &stranger).await, 200);
+
+    let (base, _) = restart(&state, list_of("owner@example.com")).await;
+    assert_eq!(ping(&base, &stranger).await, 401);
+    assert_eq!(ping(&base, &owner).await, 200);
+}
+
+#[tokio::test]
+async fn an_unlisted_account_loses_its_refresh_token_when_a_list_is_set() {
+    let Some((base, state)) = service().await else {
+        return;
+    };
+    let (.., stranger) = credentials(&base, &state, "stranger@example.com").await;
+    let (.., owner) = credentials(&base, &state, "owner@example.com").await;
+
+    let (base, _) = restart(&state, list_of("owner@example.com")).await;
+    assert_eq!(refresh_status(&base, &stranger).await, 400);
+    assert_eq!(refresh_status(&base, &owner).await, 200);
+}
+
+async fn ask_for_a_link(base: &str, email: &str) -> (u16, String) {
+    let response = client()
+        .post(format!("{base}/login"))
+        .form(&[("email", email), ("return_to", "/account")])
+        .send()
+        .await
+        .unwrap();
+    (response.status().as_u16(), response.text().await.unwrap())
+}
+
+#[tokio::test]
+async fn with_mail_off_every_address_gets_the_same_answer() {
+    let Some((base, state)) = service_full(
+        vec![SITE.to_owned()],
+        list_of("owner@example.com"),
+        None,
+        Mail::Off,
+        None,
+    )
+    .await
+    else {
+        return;
+    };
+    let (listed_status, listed) = ask_for_a_link(&base, "owner@example.com").await;
+    let (status, unlisted) = ask_for_a_link(&base, "stranger@example.com").await;
+    assert_eq!((listed_status, status), (200, 200));
+    assert_eq!(listed, unlisted);
+    assert!(listed.contains("not available"), "{listed}");
+    let links: i64 = sqlx::query_scalar("select count(*) from login_links")
+        .fetch_one(&state.db)
+        .await
+        .unwrap();
+    assert_eq!(links, 0);
+}
+
+#[tokio::test]
+async fn a_failed_send_looks_the_same_for_listed_and_unlisted_addresses() {
+    // Sending goes through a proxy nobody listens on: every send fails, and
+    // nothing leaves the machine.
+    let dead = reqwest::Client::builder()
+        .proxy(reqwest::Proxy::all("http://127.0.0.1:1").unwrap())
+        .build()
+        .unwrap();
+    let Some((base, state)) = service_full(
+        vec![SITE.to_owned()],
+        list_of("owner@example.com"),
+        None,
+        Mail::Resend {
+            api_key: "test-key-not-a-secret".to_owned(),
+            from: "test <test@example.com>".to_owned(),
+        },
+        Some(dead),
+    )
+    .await
+    else {
+        return;
+    };
+    let (listed_status, listed) = ask_for_a_link(&base, "owner@example.com").await;
+    let (status, unlisted) = ask_for_a_link(&base, "stranger@example.com").await;
+    assert_eq!((listed_status, status), (200, 200));
+    assert_eq!(
+        listed,
+        unlisted.replace("stranger@example.com", "owner@example.com")
+    );
+    let mut links: i64 = 0;
+    for _ in 0..50 {
+        links = sqlx::query_scalar("select count(*) from login_links")
+            .fetch_one(&state.db)
+            .await
+            .unwrap();
+        if links > 0 {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    assert_eq!(links, 1, "only the listed address was given a link");
+}
+
+#[tokio::test]
+async fn a_slow_send_does_not_slow_the_answer_for_a_listed_address() {
+    // A proxy that takes the connection and never answers: a send through it
+    // waits as long as the client's timeout.
+    let stall = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let proxy = format!("http://{}", stall.local_addr().unwrap());
+    let holder = tokio::spawn(async move {
+        let mut held = Vec::new();
+        while let Ok((socket, _)) = stall.accept().await {
+            held.push(socket);
+        }
+    });
+    let slow = reqwest::Client::builder()
+        .proxy(reqwest::Proxy::all(proxy).unwrap())
+        .timeout(std::time::Duration::from_secs(2))
+        .build()
+        .unwrap();
+    let Some((base, _)) = service_full(
+        vec![SITE.to_owned()],
+        list_of("owner@example.com"),
+        None,
+        Mail::Resend {
+            api_key: "test-key-not-a-secret".to_owned(),
+            from: "test <test@example.com>".to_owned(),
+        },
+        Some(slow),
+    )
+    .await
+    else {
+        holder.abort();
+        return;
+    };
+    let mut took = Vec::new();
+    for email in ["owner@example.com", "stranger@example.com"] {
+        let started = std::time::Instant::now();
+        let (status, _) = ask_for_a_link(&base, email).await;
+        assert_eq!(status, 200);
+        took.push(started.elapsed());
+    }
+    holder.abort();
+    assert!(
+        took.iter()
+            .all(|t| *t < std::time::Duration::from_millis(500)),
+        "answers took {took:?}"
+    );
 }

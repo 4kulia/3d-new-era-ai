@@ -874,11 +874,11 @@ pub async fn token(State(app): State<AppState>, Form(t): Form<TokenRequest>) -> 
                     "refresh_token belongs to another client",
                 );
             }
-            if accounts::get(&app.db, &account_id)
+            if !accounts::get(&app.db, &account_id)
                 .await
                 .ok()
                 .flatten()
-                .is_none()
+                .is_some_and(|account| app.config.allowed_emails.admits(&account.email))
             {
                 return error(
                     StatusCode::BAD_REQUEST,
@@ -938,9 +938,11 @@ pub async fn bearer(app: &AppState, headers: &HeaderMap) -> Option<accounts::Acc
     sqlx::query_as::<_, accounts::Account>(
         "select a.id, a.email from oauth_tokens t join accounts a on a.id = t.account_id
          where t.token_hash = $1 and t.kind = 'access' and t.revoked_at is null
-           and t.expires_at > now() and a.deleted_at is null",
+           and t.expires_at > now() and a.deleted_at is null
+           and ($2::text[] is null or lower(a.email) = any($2))",
     )
     .bind(secret::hash(token))
+    .bind(app.config.allowed_emails.list())
     .fetch_optional(&app.db)
     .await
     .ok()

@@ -233,7 +233,14 @@ async fn subscription(
         tracing::warn!("buymeacoffee {kind}: the address's account was closed; no plan given");
         return Ok(());
     }
-    let account = accounts::find_or_create(&app.db, email).await?;
+    // An installation that is someone's own opens no account for a payer it
+    // does not let in.
+    let Some(account) =
+        accounts::find_or_create(&app.db, &app.config.allowed_emails, email).await?
+    else {
+        tracing::warn!("buymeacoffee {kind}: the address is not let in here; no plan given");
+        return Ok(());
+    };
     let status = status_of(kind, data);
     let period_end = data["current_period_end"].as_i64();
     let supporter = data["supporter_id"].as_i64().map(|id| id.to_string());

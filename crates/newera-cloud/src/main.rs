@@ -38,7 +38,7 @@ async fn main() -> anyhow::Result<()> {
         .await
         .context("database")?;
     let port = config.port;
-    let state = newera_cloud::AppState::new(config, db.clone());
+    let state = newera_cloud::AppState::start(config, db.clone()).await?;
 
     // Projects nobody touched for half an hour leave memory; they are kept.
     let engine = state.engine.clone();
