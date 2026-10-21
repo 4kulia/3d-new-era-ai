@@ -673,7 +673,9 @@ mod tests {
         // The item is told it takes its finish, and nothing else is said.
         let told = update(format!(r#"{{"items":[{{"id":"{bowl}","w":10}}]}}"#)).unwrap_err();
         assert!(
-            told.contains("takes only name, brand, model_name, url, layer, color, mat, opacity"),
+            told.contains(
+                "takes only name, brand, model_name, url, product, purchase, layer, color, mat, opacity"
+            ),
             "{told}"
         );
         assert_eq!(told.matches("takes only").count(), 1, "{told}");

@@ -218,17 +218,54 @@ pub fn array(
     let mut commands = Vec::new();
     let mut out = Vec::new();
     if count == 0 {
+        // A mirror turns a wall's sides over, and the products on them go
+        // with their side: off every side first, then onto the other, so a
+        // wall finished on both sides never meets itself half way.
+        let flipped: Vec<crate::finishes::FinishAssignment> = if step(1).flips() {
+            doc.home()
+                .finish_assignments
+                .iter()
+                .filter(|a| ids.contains(&a.surface.element()))
+                .filter(|a| matches!(a.surface, crate::finishes::Surface::Wall(..)))
+                .cloned()
+                .collect()
+        } else {
+            Vec::new()
+        };
         for element in originals {
             let moved = transformed(element, step(1));
             out.push(moved.id());
             commands.push(Command::update(moved));
+        }
+        for assignment in &flipped {
+            commands.push(Command::RemoveFinish {
+                surface: assignment.surface,
+                band: assignment.band,
+            });
+        }
+        for mut assignment in flipped {
+            if let crate::finishes::Surface::Wall(wall, side) = assignment.surface {
+                assignment.surface = crate::finishes::Surface::Wall(wall, side.other());
+            }
+            commands.push(Command::AssignFinish {
+                assignment,
+                index: None,
+            });
         }
     } else {
         for i in 1..=count {
             for element in &originals {
                 let copy = with_new_id(doc, transformed(element.clone(), step(i)));
                 out.push(copy.id());
+                let finishes = match (element, &copy) {
+                    (Element::Wall(from), Element::Wall(to)) => {
+                        crate::finishes::copied(doc.home(), from.id, to.id, step(i).flips())
+                    }
+                    _ => Vec::new(),
+                };
                 commands.push(Command::insert(copy));
+                // A copied wall is finished as the one it copies.
+                commands.extend(finishes);
             }
         }
     }

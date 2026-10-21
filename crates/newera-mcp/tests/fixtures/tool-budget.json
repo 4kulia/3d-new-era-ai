@@ -1,5 +1,5 @@
 {
-  "total": 127647,
+  "total": 131006,
   "tools": {
     "accept": {
       "total": 1360,
@@ -96,6 +96,12 @@
       "description": 985,
       "input": 2721,
       "output": 785
+    },
+    "edit_finishes": {
+      "total": 1714,
+      "description": 331,
+      "input": 956,
+      "output": 203
     },
     "edit_history": {
       "total": 1266,
@@ -198,6 +204,12 @@
       "description": 254,
       "input": 261,
       "output": 203
+    },
+    "finishes": {
+      "total": 749,
+      "description": 219,
+      "input": 144,
+      "output": 189
     },
     "fit_roof": {
       "total": 1176,
@@ -349,10 +361,16 @@
       "input": 33,
       "output": 181
     },
+    "takeoff": {
+      "total": 925,
+      "description": 352,
+      "input": 228,
+      "output": 149
+    },
     "update": {
-      "total": 9755,
+      "total": 9723,
       "description": 1001,
-      "input": 7696,
+      "input": 7664,
       "output": 857
     },
     "variants": {

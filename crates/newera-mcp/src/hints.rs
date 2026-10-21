@@ -88,6 +88,8 @@ const HINTS: &[(&str, &str, Effect, bool)] = &[
         false,
     ),
     ("lighting", "Rate the lighting", Effect::Read, false),
+    ("finishes", "List finishes on surfaces", Effect::Read, false),
+    ("takeoff", "Measure quantities to buy", Effect::Read, false),
     (
         "annotations",
         "Read dimensions, tags and notes",
@@ -125,6 +127,12 @@ const HINTS: &[(&str, &str, Effect, bool)] = &[
     ),
     // Writes that change or remove.
     ("update", "Change elements", Effect::Change, false),
+    (
+        "edit_finishes",
+        "Put products on surfaces",
+        Effect::Change,
+        false,
+    ),
     ("move", "Move elements", Effect::Change, false),
     ("delete", "Delete elements", Effect::Change, false),
     ("arrange", "Copy, align and group", Effect::Change, false),
@@ -313,6 +321,7 @@ mod tests {
             ("edit_video", "video"),
             ("edit_variants", "variants"),
             ("edit_disciplines", "disciplines"),
+            ("edit_finishes", "finishes"),
         ] {
             let why = crate::call(
                 document.clone(),

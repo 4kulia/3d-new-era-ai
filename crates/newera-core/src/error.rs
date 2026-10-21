@@ -14,6 +14,10 @@ pub enum CoreError {
     #[error("invalid geometry: {0}")]
     InvalidGeometry(String),
 
+    /// A finish that cannot be put on its surface, with why.
+    #[error("{0}")]
+    InvalidFinish(String),
+
     #[error("variant {0} does not exist")]
     NoSuchVariant(usize),
 

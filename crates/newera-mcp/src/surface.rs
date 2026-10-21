@@ -137,6 +137,10 @@ const CATEGORIES: &[(&str, &[&str])] = &[
     ),
     ("products", &["import_product", "products", "edit_products"]),
     (
+        "finishes and quantities",
+        &["finishes", "edit_finishes", "takeoff"],
+    ),
+    (
         "drawing",
         &[
             "create",

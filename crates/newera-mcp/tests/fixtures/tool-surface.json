@@ -1849,6 +1849,86 @@
     },
     "title": "Change the electrical project"
   },
+  "edit_finishes": {
+    "annotations": {
+      "destructiveHint": true,
+      "openWorldHint": false,
+      "readOnlyHint": false,
+      "title": "Put products on surfaces"
+    },
+    "description": "Put a shop product (tile, laminate, paint, wallpaper) on a room's floor or ceiling or a wall side, or take it off. assign {surface, product, band?, coats?, waste?, mat?}: band [from,to] cm splits a wall side (tile below, paint above); mat sets the look in the same step. remove {surface, band?}. One undo step. finishes lists them.",
+    "inputSchema": {
+      "properties": {
+        "action": {
+          "description": "`assign` puts a product on a surface, replacing the one on the same band; `remove` takes it off",
+          "enum": [
+            "assign",
+            "remove"
+          ],
+          "type": "string"
+        },
+        "band": {
+          "description": "Height on a wall side, `[from, to]` cm above the floor (default all of it); `remove` without it clears the whole surface",
+          "items": {
+            "type": "number"
+          },
+          "maxItems": 2,
+          "minItems": 2,
+          "type": "array"
+        },
+        "coats": {
+          "description": "For `assign`: coats of paint",
+          "type": "integer"
+        },
+        "mat": {
+          "description": "For `assign`: the surface's look, as `update` takes it (`#rrggbb`, `tiles #ffffff 30x60`, `img:…`)",
+          "type": "string"
+        },
+        "product": {
+          "description": "For `assign`: the hosted service's product id",
+          "type": "string"
+        },
+        "surface": {
+          "description": "`r3:floor`, `r3:ceiling`, `w5:left` or `w5:right` (sides as seen walking from the wall's a to b)",
+          "type": "string"
+        },
+        "waste": {
+          "description": "For `assign`: waste %, bought on top for cuts and breakage",
+          "type": "number"
+        }
+      },
+      "type": "object"
+    },
+    "name": "edit_finishes",
+    "outputSchema": {
+      "properties": {
+        "ids": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "ok": {
+          "type": "boolean"
+        },
+        "rev": {
+          "type": "integer"
+        },
+        "text": {
+          "type": "string"
+        },
+        "v": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "ok",
+        "text"
+      ],
+      "type": "object"
+    },
+    "title": "Put products on surfaces"
+  },
   "edit_history": {
     "annotations": {
       "destructiveHint": true,
@@ -3445,6 +3525,49 @@
       "type": "object"
     },
     "title": "New, open or save"
+  },
+  "finishes": {
+    "annotations": {
+      "openWorldHint": false,
+      "readOnlyHint": true,
+      "title": "List finishes on surfaces"
+    },
+    "description": "Which shop product covers which floor, ceiling or wall side (tile, laminate, paint, wallpaper): rows [surface, room, product, band [from,to] cm, coats, waste %]; gone: surfaces deleted since. edit_finishes changes them.",
+    "inputSchema": {
+      "properties": {
+        "surface": {
+          "description": "Only this surface, e.g. `r3:floor` or `w5:left` (default every one)",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "name": "finishes",
+    "outputSchema": {
+      "properties": {
+        "columns": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "gone": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "rows": {
+          "type": "array"
+        }
+      },
+      "required": [
+        "columns",
+        "rows"
+      ],
+      "type": "object"
+    },
+    "title": "List finishes on surfaces"
   },
   "fit_roof": {
     "annotations": {
@@ -5504,6 +5627,47 @@
     },
     "title": "Show the plan"
   },
+  "takeoff": {
+    "annotations": {
+      "openWorldHint": false,
+      "readOnlyHint": true,
+      "title": "Measure quantities to buy"
+    },
+    "description": "Quantities for an estimate, per shop product id: the m² of floor, ceiling and wall area each finish covers — net, gross and doors or windows deducted, per storey and room — and the pieces to buy: each with a product, unless update sets purchase=existing or excluded. Packs, waste and coats are left to the estimate. finishes says what covers what.",
+    "inputSchema": {
+      "properties": {
+        "product": {
+          "description": "Only this product id",
+          "type": "string"
+        },
+        "room": {
+          "description": "Only this room, e.g. `r3`: its floor, ceiling, the wall sides facing it, the pieces in it",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "name": "takeoff",
+    "outputSchema": {
+      "properties": {
+        "finishes": {
+          "type": "array"
+        },
+        "furniture": {
+          "type": "array"
+        },
+        "gone": {
+          "type": "array"
+        }
+      },
+      "required": [
+        "finishes",
+        "furniture"
+      ],
+      "type": "object"
+    },
+    "title": "Measure quantities to buy"
+  },
   "update": {
     "annotations": {
       "destructiveHint": true,
@@ -5653,22 +5817,22 @@
         },
         "UpdateSpec": {
           "additionalProperties": false,
-          "description": "Fields to change; each applies only to the kinds that have it, and any other is refused",
+          "description": "Fields to change, each for the kinds that have it; any other is refused",
           "properties": {
             "a": {
               "$ref": "#/$defs/Point2",
               "description": "Start point (wall, dimension)"
             },
             "about": {
-              "description": "The piece a note is about (e.g. `f1185`), checked by `annotations` stale; `\"\"` unties it",
+              "description": "The piece a label is about (`f12`); `\"\"` unties it",
               "type": "string"
             },
             "align": {
               "$ref": "#/$defs/TextAlign",
-              "description": "Label alignment: `left`, `center`, `right`"
+              "description": "Label alignment"
             },
             "anchor": {
-              "description": "Face that stays put on a resize: `back`, `front`, `left`, `right` (as the piece faces), `bottom`, `top`, or `+x`, `-x`, `+y`, `-y`; default the center",
+              "description": "Face that stays put on a resize: back, front, left, right (as the piece faces), bottom, top, or +x, -x, +y, -y; default the center",
               "type": "string"
             },
             "angle": {
@@ -5684,7 +5848,7 @@
               "description": "Position (label, furniture center)"
             },
             "auto": {
-              "description": "Room follows its walls (re-detected when they change); `pts` turns it off",
+              "description": "Room re-detected when its walls change; `pts` turns it off",
               "type": "boolean"
             },
             "b": {
@@ -5696,7 +5860,7 @@
               "type": "boolean"
             },
             "brand": {
-              "description": "Furniture brand (references)",
+              "description": "Furniture brand",
               "type": "string"
             },
             "ceil_mat": {
@@ -5708,7 +5872,7 @@
               "type": "boolean"
             },
             "ceiling_flat": {
-              "description": "Room ceiling flat at storey height (true) or following the wall profiles (false)",
+              "description": "Room ceiling flat at storey height, false following the walls",
               "type": "boolean"
             },
             "color": {
@@ -5749,7 +5913,7 @@
               "type": "number"
             },
             "glass": {
-              "description": "Glass of a guard or a closure: `laminated`, `tempered`, `tempered-laminated` or `wired`",
+              "description": "Guard or closure glass: laminated, tempered, tempered-laminated or wired",
               "type": "string"
             },
             "h": {
@@ -5777,7 +5941,7 @@
               "type": "boolean"
             },
             "layer": {
-              "description": "Plan layer: `lighting`, `appliances`, `joinery` or `none`; empty restores its own",
+              "description": "Plan layer: lighting, appliances, joinery or none; empty restores its own",
               "type": "string"
             },
             "left": {
@@ -5785,7 +5949,7 @@
               "type": "string"
             },
             "level": {
-              "description": "Move the element to this level id (e.g. `lv2`)",
+              "description": "Move it to this storey, e.g. `lv2`",
               "type": "string"
             },
             "light": {
@@ -5820,6 +5984,10 @@
               "description": "3D tilt degrees: label 0 flat, 90 standing; dimension around its line; furniture around its width axis",
               "type": "number"
             },
+            "product": {
+              "description": "Shop product id; `\"\"` clears",
+              "type": "string"
+            },
             "pts": {
               "description": "Room polygon",
               "items": {
@@ -5827,12 +5995,21 @@
               },
               "type": "array"
             },
+            "purchase": {
+              "description": "With a product, bought unless `existing` or `excluded`",
+              "enum": [
+                "buy",
+                "existing",
+                "excluded"
+              ],
+              "type": "string"
+            },
             "right": {
               "description": "Wall finish on the right of a→b",
               "type": "string"
             },
             "role": {
-              "description": "Role independent of the name: `trim`, `backsplash`, `counter`, `stair`; empty: automatic",
+              "description": "Role, whatever the name: trim, backsplash, counter, stair; empty: automatic",
               "type": "string"
             },
             "roll": {
@@ -5841,7 +6018,7 @@
             },
             "room_use": {
               "$ref": "#/$defs/RoomUse",
-              "description": "Declared room program, independent of name; auto restores inference"
+              "description": "Room program; auto infers it"
             },
             "sides": {
               "description": "Wall finish on both sides",
@@ -5871,7 +6048,7 @@
               "type": "string"
             },
             "type": {
-              "description": "Wall type id (sets thickness unless `t` is given); `none` clears",
+              "description": "Wall type id (sets thickness unless `t`); `none` clears",
               "type": "string"
             },
             "url": {

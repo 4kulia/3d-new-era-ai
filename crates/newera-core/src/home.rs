@@ -81,6 +81,9 @@ pub struct Home {
     pub show_all_in_3d: bool,
     #[serde(default, skip_serializing_if = "Properties::is_empty")]
     pub properties: Properties,
+    /// Which shop product covers which floor, ceiling or wall side.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub finish_assignments: Vec<crate::finishes::FinishAssignment>,
     /// Next number handed out for any id. Monotonic, so ids an agent saw
     /// earlier never point to a different element later.
     #[serde(default)]
@@ -116,6 +119,7 @@ impl Default for Home {
             show_all_in_3d: false,
             annotations: crate::annotations::PlanAnnotations::default(),
             properties: Properties::new(),
+            finish_assignments: Vec::new(),
             next_id: 1,
         }
     }
@@ -398,6 +402,15 @@ impl Home {
             hidden_layers: self.hidden_layers.clone(),
             show_all_in_3d: self.show_all_in_3d,
             properties: self.properties.clone(),
+            finish_assignments: self
+                .finish_assignments
+                .iter()
+                .filter(|a| {
+                    self.element(a.surface.element())
+                        .is_some_and(|e| keep(e.level()))
+                })
+                .cloned()
+                .collect(),
             next_id: self.next_id,
             polylines: self
                 .polylines
@@ -551,15 +564,63 @@ impl Home {
         out
     }
 
-    /// Door and window holes in each wall, in `walls` order.
+    /// Door and window holes in each wall, in `walls` order. An opening
+    /// cuts only the walls of its own storey: the window upstairs stands
+    /// over the wall below, at a height measured from another floor.
     pub fn wall_cuts(&self) -> Vec<Vec<WallCut>> {
-        let pieces: Vec<Furniture> = self
-            .furniture
+        self.by_storey(|walls, storey| {
+            let pieces: Vec<Furniture> = self
+                .furniture
+                .iter()
+                .filter(|top| self.resolve_level(top.level) == storey)
+                .flat_map(Furniture::flatten)
+                .cloned()
+                .collect();
+            wall_cuts(walls, &pieces)
+        })
+    }
+
+    /// The outline of every wall joined with the walls of its own storey
+    /// only, in `walls` order: [`Home::wall_outlines`] joins whatever
+    /// meets on the plan, a wall upstairs included.
+    pub fn storey_wall_outlines(&self) -> Vec<Vec<Point2>> {
+        self.by_storey(|walls, _| wall_outlines(walls))
+    }
+
+    /// `per` asked once for each storey's walls, its answers put back in
+    /// `walls` order.
+    fn by_storey<T: Clone + Default>(
+        &self,
+        per: impl Fn(&[Wall], Option<LevelId>) -> Vec<T>,
+    ) -> Vec<T> {
+        let mut out = vec![T::default(); self.walls.len()];
+        let mut storeys: Vec<Option<LevelId>> = Vec::new();
+        for wall in &self.walls {
+            let storey = self.resolve_level(wall.level);
+            if storeys.contains(&storey) {
+                continue;
+            }
+            storeys.push(storey);
+            let at: Vec<usize> = (0..self.walls.len())
+                .filter(|i| self.resolve_level(self.walls[*i].level) == storey)
+                .collect();
+            let walls: Vec<Wall> = at.iter().map(|i| self.walls[*i].clone()).collect();
+            for (i, answer) in at.into_iter().zip(per(&walls, storey)) {
+                out[i] = answer;
+            }
+        }
+        out
+    }
+
+    /// The smallest room on storey `level` with `p` inside: where rooms
+    /// nest, the inner one.
+    #[must_use]
+    pub fn room_at(&self, p: Point2, level: Option<LevelId>) -> Option<&Room> {
+        self.rooms
             .iter()
-            .flat_map(Furniture::flatten)
-            .cloned()
-            .collect();
-        wall_cuts(&self.walls, &pieces)
+            .filter(|r| self.on_level(r.level, level))
+            .filter(|r| r.points.len() >= 3 && crate::electrical::inside(&r.points, p))
+            .min_by(|a, b| a.area().total_cmp(&b.area()))
     }
 
     /// Bounds of what is built (walls, rooms, furniture), ignoring texts,

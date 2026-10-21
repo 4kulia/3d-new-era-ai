@@ -22,6 +22,9 @@ use crate::view::scene::SceneView;
 const EXTERNAL_CHANGES_POLL: Duration = Duration::from_millis(200);
 const PASTE_OFFSET: f64 = 30.0;
 
+/// A copied element, with the products its sides had when it was copied.
+type Clip = (Element, Vec<newera_core::finishes::FinishAssignment>);
+
 /// What to do once unsaved changes have been dealt with.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum Pending {
@@ -100,7 +103,8 @@ pub(crate) struct NewEraApp {
     settings: Settings,
     pub(crate) dialog: Option<Dialog>,
     status: Option<(String, Instant)>,
-    clipboard: Vec<Element>,
+    /// What was copied, each with the products its sides had then.
+    clipboard: Vec<Clip>,
     pending: Option<Pending>,
     allow_close: bool,
     title: String,
@@ -1184,24 +1188,43 @@ impl NewEraApp {
         });
     }
 
-    fn copy(&mut self) {
-        self.clipboard = self.selected_elements();
+    /// The selection as it is now, each wall with the products on its
+    /// sides: a paste carries those, whatever happened to the original.
+    fn clips(&self) -> Vec<Clip> {
+        let doc = self.document.read();
+        self.selected_elements()
+            .into_iter()
+            .map(|element| {
+                let finishes = match element.id() {
+                    ElementId::Wall(wall) => newera_core::finishes::of_wall(doc.home(), wall),
+                    _ => Vec::new(),
+                };
+                (element, finishes)
+            })
+            .collect()
     }
 
-    fn paste(&mut self, elements: Vec<Element>) {
-        if elements.is_empty() {
+    fn copy(&mut self) {
+        self.clipboard = self.clips();
+    }
+
+    fn paste(&mut self, clips: Vec<Clip>) {
+        if clips.is_empty() {
             return;
         }
         let mut new_ids = Vec::new();
         self.run(|doc| {
-            let commands = elements
-                .into_iter()
-                .map(|element| {
-                    let moved = shift_with_new_id(doc, element, PASTE_OFFSET);
-                    new_ids.push(moved.id());
-                    Command::insert(moved)
-                })
-                .collect();
+            let mut commands = Vec::new();
+            for (element, finishes) in clips {
+                let moved = shift_with_new_id(doc, element, PASTE_OFFSET);
+                new_ids.push(moved.id());
+                let to = moved.id();
+                commands.push(Command::insert(moved));
+                // A pasted wall is finished as the one it copies was.
+                if let ElementId::Wall(to) = to {
+                    commands.extend(newera_core::finishes::onto(&finishes, to, false));
+                }
+            }
             doc.execute(Command::Batch { commands })
         });
         self.selection = new_ids.into_iter().collect();
@@ -1357,7 +1380,7 @@ impl NewEraApp {
             self.paste(self.clipboard.clone());
         }
         if pressed(cmd, Key::D) {
-            let selected = self.selected_elements();
+            let selected = self.clips();
             self.paste(selected);
         }
         if pressed(cmd, Key::Equals) || pressed(cmd, Key::Plus) {
@@ -1641,7 +1664,7 @@ impl NewEraApp {
                     "Ctrl+D",
                     has_selection,
                 ) {
-                    let selected = self.selected_elements();
+                    let selected = self.clips();
                     self.paste(selected);
                 }
                 if menu_item(

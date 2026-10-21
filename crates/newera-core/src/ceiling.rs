@@ -230,6 +230,16 @@ fn wall_ceiling(home: &Home, room: &Room) -> Vec<CeilingTriangle> {
     faces
 }
 
+/// The storey physically above `level`: the lowest designed one over its
+/// floor — not a tracing or another layout drawn at the same elevation.
+pub(crate) fn storey_above(home: &Home, level: Option<crate::LevelId>) -> Option<crate::LevelId> {
+    let floor = home.elevation_of(level);
+    home.sorted_levels()
+        .into_iter()
+        .find(|l| !l.is_reference() && l.elevation > floor + 1.0)
+        .map(|l| l.id)
+}
+
 /// Surface of a visible room. Sloping rooms interpolate the tops of their
 /// boundary walls, preserving intermediate wall vertices (gable peaks).
 /// Without those walls the slope is unknown, not an invented flat plane.
@@ -314,15 +324,7 @@ pub fn room_ceiling(home: &Home, room: &Room) -> Vec<CeilingTriangle> {
     }
     // The stair climbing to the storey above goes up through this ceiling:
     // its void, the one it opens in that storey's floor, is open here too.
-    // The storey physically above: the lowest designed one over this floor —
-    // not a tracing or another layout drawn at the same elevation.
-    let floor = home.elevation_of(level);
-    let above = home
-        .sorted_levels()
-        .into_iter()
-        .find(|l| !l.is_reference() && l.elevation > floor + 1.0)
-        .map(|l| l.id);
-    if let Some(above) = above {
+    if let Some(above) = storey_above(home, level) {
         for void in crate::stair_holes(home, Some(above)) {
             let cut = to_polygon(&void);
             let mut next = Vec::new();

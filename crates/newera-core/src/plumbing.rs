@@ -325,13 +325,6 @@ pub fn pipe_of(line: &Polyline) -> Option<Pipe> {
     Pipe::parse(line.properties.get(PIPE_KEY)?)
 }
 
-fn room_of(rooms: &[Room], p: Point2) -> Option<&Room> {
-    rooms
-        .iter()
-        .filter(|r| r.points.len() >= 3 && inside(&r.points, p))
-        .min_by(|a, b| a.area().total_cmp(&b.area()))
-}
-
 /// Every plumbing point on the storey shown.
 pub fn points(home: &Home) -> Vec<Point> {
     let view = home.level_view(home.current_level());
@@ -345,7 +338,7 @@ pub fn points(home: &Home) -> Vec<Point> {
                 id: f.id,
                 kind,
                 name: f.name.clone(),
-                room: room_of(&view.rooms, f.position).map(|r| r.id),
+                room: view.room_at(f.position, view.current_level()).map(|r| r.id),
                 at: f.position,
                 z: f.elevation + f.height / 2.0,
             })
@@ -395,7 +388,7 @@ pub fn fixtures(home: &Home) -> Vec<(Fixture, Furniture)> {
         if !matches!(*fixture, Fixture::Basin | Fixture::KitchenSink) || !is_bowl(piece) {
             continue;
         }
-        let Some(room) = room_of(&view.rooms, piece.position) else {
+        let Some(room) = view.room_at(piece.position, view.current_level()) else {
             continue;
         };
         let says = room.mentions();
@@ -587,7 +580,7 @@ fn found(home: &Home) -> Vec<Finding> {
     let has = |kind: PointKind| all.iter().any(|p| p.kind == kind);
     let hot_system = has(PointKind::Hot);
     for (fixture, piece) in &fixtures {
-        let room = room_of(&view.rooms, piece.position);
+        let room = view.room_at(piece.position, view.current_level());
         let at = place(room, piece);
         let reach = reach_of(piece).round();
         if !near(piece, &[PointKind::Cold]) {

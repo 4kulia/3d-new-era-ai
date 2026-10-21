@@ -277,6 +277,39 @@ pub struct PieceInfo {
     /// Top view image drawn in the plan.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub plan_icon: Option<String>,
+    /// The shop product it is, by the hosted service's product id. Prices
+    /// live there, never in the project.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub product: Option<String>,
+    /// Whether the estimate buys it; `None` is [`PieceInfo::purchase`]'s
+    /// default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub purchase: Option<Purchase>,
+}
+
+impl PieceInfo {
+    /// Whether the piece is to be bought: as declared, else bought when it
+    /// is a shop product and left out when it is not.
+    #[must_use]
+    pub fn purchase(&self) -> Purchase {
+        self.purchase.unwrap_or(if self.product.is_some() {
+            Purchase::Buy
+        } else {
+            Purchase::Excluded
+        })
+    }
+}
+
+/// What the estimate does with a piece.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum Purchase {
+    /// Bought: a line of the estimate.
+    Buy,
+    /// Already owned: drawn, not bought.
+    Existing,
+    /// Left out of the estimate.
+    Excluded,
 }
 
 /// What the user may change on a piece.

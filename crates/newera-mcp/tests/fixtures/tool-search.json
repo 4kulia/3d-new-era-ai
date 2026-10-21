@@ -119,7 +119,15 @@
     ["refresh the price of a product", "edit_products"],
     ["delete an imported product", "edit_products"],
     ["import a praxis tile with its m2 per pack", "import_product"],
-    ["show the price history of a product", "products"]
+    ["show the price history of a product", "products"],
+    ["put tiles on the bathroom wall up to 120 cm", "edit_finishes"],
+    ["assign a paint product to a wall side", "edit_finishes"],
+    ["lay laminate on the bedroom floor", "edit_finishes"],
+    ["which product covers each wall floor and ceiling", "finishes"],
+    ["list the finishes assigned to surfaces", "finishes"],
+    ["how many square metres of tile to buy", "takeoff"],
+    ["quantities per product for the estimate", "takeoff"],
+    ["wall area to paint minus doors and windows", "takeoff"]
   ],
   "not_on_cloud": [
     ["import sweet home 3d sh3d", "the hosted service's file `open` takes the account's projects by name and reads no file from a disk"]
@@ -138,6 +146,7 @@
     ["edit_cameras", "render_3d", "both speak of a camera (yaw, pitch): one stores a view, the other draws one"],
     ["products", "edit_products", "a read and the write that changes it: separate tools so a client runs the read without asking"],
     ["import_product", "products", "the write that adds to the library and the read of it: separate tools so a client runs the read without asking"],
-    ["import_product", "edit_products", "both write the library: one adds a product from a shop's link, the other changes one already kept by its id"]
+    ["import_product", "edit_products", "both write the library: one adds a product from a shop's link, the other changes one already kept by its id"],
+    ["finishes", "edit_finishes", "a read and the write that changes it: separate tools so a client runs the read without asking"]
   ]
 }

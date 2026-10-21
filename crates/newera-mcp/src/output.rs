@@ -654,6 +654,39 @@ pub(crate) fn schema(name: &str) -> Option<Value> {
             &["checkpoints"],
         ),
         "plugins" => shape(&[("rows", list("[name, title, description]"))], &["rows"]),
+        "finishes" => shape(
+            &[
+                ("columns", strings("What each row holds")),
+                (
+                    "rows",
+                    list("[surface, room, product, band [from, to] cm, coats, waste %]"),
+                ),
+                (
+                    "gone",
+                    strings("Surfaces deleted since their finish was put on"),
+                ),
+            ],
+            &["columns", "rows"],
+        ),
+        "takeoff" => shape(
+            &[
+                (
+                    "finishes",
+                    list(
+                        "By product: {product, net_m2, gross_m2, openings_m2, surfaces: [{surface, level?, room?, band?, coats?, waste?, gross_m2, openings_m2, net_m2, openings?}]}",
+                    ),
+                ),
+                (
+                    "furniture",
+                    list("Pieces bought, by product: {product, pieces, ids}"),
+                ),
+                (
+                    "gone",
+                    list("Finishes whose surface was deleted: {surface, product}"),
+                ),
+            ],
+            &["finishes", "furniture"],
+        ),
         "disciplines" | "edit_disciplines" => shape(
             &[
                 (
@@ -852,7 +885,9 @@ pub(crate) fn schema(name: &str) -> Option<Value> {
         ),
         // Writes answering an `ok` line.
         "create" | "edit_walls" | "edit_background" | "edit_levels" | "edit_cameras"
-        | "edit_home" | "file" | "arrange" | "edit_model" | "edit_library" => ok_line(&[]),
+        | "edit_home" | "file" | "arrange" | "edit_model" | "edit_library" | "edit_finishes" => {
+            ok_line(&[])
+        }
         "delete" => ok_line(&[
             (
                 "labels_left",
@@ -1378,6 +1413,21 @@ mod tests {
             (
                 "edit_electrical",
                 json!({"action": "voltage", "volts": 220}),
+            ),
+            (
+                "edit_finishes",
+                json!({"action": "assign", "surface": "w3:left", "product": "p1", "band": [0, 120], "waste": 10, "mat": "tiles #ffffff 30x60"}),
+            ),
+            (
+                "edit_finishes",
+                json!({"action": "assign", "surface": "r5:floor", "product": "p2"}),
+            ),
+            ("finishes", json!({})),
+            ("takeoff", json!({})),
+            ("takeoff", json!({"room": "r5", "product": "p2"})),
+            (
+                "edit_finishes",
+                json!({"action": "remove", "surface": "w3:left"}),
             ),
             ("edit_annotations", json!({"dims": true, "legend": true})),
             ("edit_annotations", json!({"refs": true})),

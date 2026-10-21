@@ -282,6 +282,19 @@ fn run(
                 .edit_plumbing(Parameters(params(args)?))
                 .map_err(reason)?,
         )),
+        "finishes" => Ok(said(
+            server
+                .read_finishes(Parameters(params(args)?))
+                .map_err(reason)?,
+        )),
+        "edit_finishes" => Ok(said(
+            server
+                .edit_finishes(Parameters(params(args)?))
+                .map_err(reason)?,
+        )),
+        "takeoff" => Ok(said(
+            server.takeoff(Parameters(params(args)?)).map_err(reason)?,
+        )),
         "edit_home" => Ok(said(
             server.set_home(Parameters(params(args)?)).map_err(reason)?,
         )),

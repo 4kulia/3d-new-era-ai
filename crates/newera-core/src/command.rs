@@ -58,6 +58,20 @@ pub enum Command {
     SetEnvironment {
         environment: crate::style::Environment,
     },
+    /// Puts a product on a surface, replacing the one on the same surface
+    /// and band.
+    AssignFinish {
+        assignment: crate::finishes::FinishAssignment,
+        /// Position in the list; used internally to restore order on undo.
+        #[serde(default, skip)]
+        index: Option<usize>,
+    },
+    /// Takes the product off a surface band (`None`: the whole surface).
+    RemoveFinish {
+        surface: crate::finishes::Surface,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        band: Option<crate::finishes::Band>,
+    },
     /// Several commands applied atomically: either all succeed or none does.
     Batch {
         commands: Vec<Command>,
@@ -190,6 +204,10 @@ impl Command {
                     environment: previous,
                 })
             }
+            Self::AssignFinish { assignment, index } => {
+                crate::finishes::assign(home, assignment, index)
+            }
+            Self::RemoveFinish { surface, band } => crate::finishes::remove(home, surface, band),
             Self::Batch { commands } => {
                 let mut inverses = Vec::with_capacity(commands.len());
                 for command in commands {

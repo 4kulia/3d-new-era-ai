@@ -26,6 +26,7 @@
 //! | [`feedback`] | `feedback` |
 //! | [`electrical`] | `electrical`, `edit_electrical` |
 //! | [`plumbing`] | `plumbing`, `edit_plumbing` |
+//! | [`finishes`] | `finishes`, `edit_finishes`, `takeoff` |
 //! | [`rules`] | `rules` |
 //! | [`reply`] | no tools: what every write needs to answer |
 //!
@@ -48,6 +49,7 @@ mod check;
 mod electrical;
 mod elements;
 mod feedback;
+mod finishes;
 mod furniture;
 mod joinery;
 mod levels;
@@ -117,6 +119,7 @@ impl NewEraMcp {
             Self::feedback_router(),
             Self::electrical_router(),
             Self::plumbing_router(),
+            Self::finishes_router(),
             Self::rules_router(),
         ];
         let expected: usize = parts.iter().map(|r| r.map.len()).sum();

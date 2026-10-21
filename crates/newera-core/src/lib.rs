@@ -18,6 +18,7 @@ mod document;
 pub mod electrical;
 mod elements;
 mod error;
+pub mod finishes;
 pub mod front;
 mod furniture;
 mod geometry;
@@ -42,6 +43,7 @@ pub mod routing;
 mod solid;
 pub mod standards;
 mod style;
+pub mod takeoff;
 pub mod tape;
 pub mod text;
 mod units;
@@ -68,8 +70,8 @@ pub use elements::{
 pub use error::{CoreError, CoreResult};
 pub use furniture::{
     FarModel, Furniture, Light, LightSource, Measure, ModelMaterial, ModelPart, ModelTransform,
-    Opening, OpeningKind, PieceInfo, PieceLocks, Reference, Sash, SolidShape, WallCut, WallCutOut,
-    align_to_wall, cut_outline, wall_cuts,
+    Opening, OpeningKind, PieceInfo, PieceLocks, Purchase, Reference, Sash, SolidShape, WallCut,
+    WallCutOut, align_to_wall, cut_outline, wall_cuts,
 };
 pub use geometry::{Point2, polygon_area, polygon_centroid, signed_area, to_polygon, triangulate};
 pub use home::Home;

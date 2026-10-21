@@ -37,9 +37,10 @@ pub fn split_wall(doc: &mut Document, id: WallId, t: f64) -> CoreResult<WallId> 
         arc_extent: wall.arc_extent.map(|a| a * (1.0 - t)),
         ..wall
     };
-    doc.execute(Command::Batch {
-        commands: vec![Command::update(first), Command::insert(second)],
-    })?;
+    let mut commands = vec![Command::update(first), Command::insert(second)];
+    // Both halves keep the products on their sides.
+    commands.extend(crate::finishes::copied(doc.home(), id, new_id, false));
+    doc.execute(Command::Batch { commands })?;
     Ok(new_id)
 }
 
@@ -355,6 +356,34 @@ fn wall_face(
     if side == WallSide::Axis {
         return Ok((wall.start, wall.end, sign));
     }
+    let target = sign * wall.thickness / 2.0;
+    let Some((lo, hi)) = face_span(&wall, &outline, sign) else {
+        return Err(CoreError::InvalidGeometry(format!(
+            "{id} has no {side:?} face to measure"
+        )));
+    };
+    let at = |s: f64| {
+        Point2::new(
+            wall.start.x + dir.0 * s + normal.0 * target,
+            wall.start.y + dir.1 * s + normal.1 * target,
+        )
+    };
+    Ok((at(lo), at(hi), sign))
+}
+
+/// Where one face of a straight wall runs, as joined with its neighbours:
+/// `(from, to)` cm along the wall from its start (beyond `0..length` where a
+/// corner adds to it, inside where a joining wall takes from it). `sign` is
+/// `1.0` for the left side of start → end, `-1.0` for the right; `outline`
+/// is the wall's joined outline ([`crate::Home::wall_outlines`] of its
+/// storey). `None` when the outline has no such face.
+pub(crate) fn face_span(wall: &Wall, outline: &[Point2], sign: f64) -> Option<(f64, f64)> {
+    let len = wall.start.distance(wall.end).max(1e-9);
+    let dir = (
+        (wall.end.x - wall.start.x) / len,
+        (wall.end.y - wall.start.y) / len,
+    );
+    let normal = (dir.1, -dir.0);
     let along = |p: Point2| (p.x - wall.start.x) * dir.0 + (p.y - wall.start.y) * dir.1;
     let across = |p: Point2| (p.x - wall.start.x) * normal.0 + (p.y - wall.start.y) * normal.1;
     let target = sign * wall.thickness / 2.0;
@@ -366,18 +395,7 @@ fn wall_face(
     let (lo, hi) = on_face
         .iter()
         .fold((f64::MAX, f64::MIN), |(lo, hi), v| (lo.min(*v), hi.max(*v)));
-    if on_face.len() < 2 || hi - lo < 0.1 {
-        return Err(CoreError::InvalidGeometry(format!(
-            "{id} has no {side:?} face to measure"
-        )));
-    }
-    let at = |s: f64| {
-        Point2::new(
-            wall.start.x + dir.0 * s + normal.0 * target,
-            wall.start.y + dir.1 * s + normal.1 * target,
-        )
-    };
-    Ok((at(lo), at(hi), sign))
+    (on_face.len() >= 2 && hi - lo >= 0.1).then_some((lo, hi))
 }
 
 /// A dimension along one line of a wall, `gap` cm off the measured line on

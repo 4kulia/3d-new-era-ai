@@ -627,12 +627,12 @@ pub(crate) fn create(doc: &mut Document, params: CreateParams) -> EditResult<Cre
     Ok(Created { ids, welded })
 }
 
-/// Fields to change; each applies only to the kinds that have it, and any
-/// other is refused.
+/// Fields to change, each for the kinds that have it; any other is
+/// refused.
 #[derive(Debug, Clone, Default, Deserialize, serde::Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct UpdateSpec {
-    /// Declared room program, independent of name; auto restores inference.
+    /// Room program; auto infers it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub room_use: Option<newera_core::RoomUse>,
     /// The element to change.
@@ -659,8 +659,7 @@ pub(crate) struct UpdateSpec {
     /// Room polygon.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pts: Option<Vec<Point2>>,
-    /// The piece a note is about (e.g. `f1185`), checked by `annotations`
-    /// stale; `""` unties it.
+    /// The piece a label is about (`f12`); `""` unties it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub about: Option<String>,
     /// Room floor visible.
@@ -669,8 +668,7 @@ pub(crate) struct UpdateSpec {
     /// Room ceiling visible.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ceiling: Option<bool>,
-    /// Room ceiling flat at storey height (true) or following the wall
-    /// profiles (false).
+    /// Room ceiling flat at storey height, false following the walls.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ceiling_flat: Option<bool>,
     /// Label text.
@@ -697,7 +695,7 @@ pub(crate) struct UpdateSpec {
     /// Elevation cm (furniture, level, 3D label/dimension).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub elev: Option<f64>,
-    /// Room follows its walls (re-detected when they change); `pts` turns it off.
+    /// Room re-detected when its walls change; `pts` turns it off.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub auto: Option<bool>,
     /// Polyline is a room divider.
@@ -721,17 +719,16 @@ pub(crate) struct UpdateSpec {
     /// Furniture mirrored left to right.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mirror: Option<bool>,
-    /// Face that stays put on a resize: `back`, `front`, `left`, `right`
-    /// (as the piece faces), `bottom`, `top`, or `+x`, `-x`, `+y`, `-y`;
-    /// default the center.
+    /// Face that stays put on a resize: back, front, left, right (as the
+    /// piece faces), bottom, top, or +x, -x, +y, -y; default the center.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub anchor: Option<String>,
     /// On a group resize, the parts that take the change; the others keep
     /// their size.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stretch: Option<Vec<String>>,
-    /// Plan layer: `lighting`, `appliances`, `joinery` or `none`; empty
-    /// restores its own.
+    /// Plan layer: lighting, appliances, joinery or none; empty restores
+    /// its own.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub layer: Option<String>,
     /// Show or hide the element.
@@ -743,8 +740,8 @@ pub(crate) struct UpdateSpec {
     /// Door hinge on the right.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub hinge_right: Option<bool>,
-    /// Glass of a guard or a closure: `laminated`, `tempered`,
-    /// `tempered-laminated` or `wired`.
+    /// Guard or closure glass: laminated, tempered, tempered-laminated or
+    /// wired.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub glass: Option<String>,
     /// Clear gap between a railing's bars, cm.
@@ -754,13 +751,13 @@ pub(crate) struct UpdateSpec {
     /// name decide.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fixed: Option<Fixed>,
-    /// Move the element to this level id (e.g. `lv2`).
+    /// Move it to this storey, e.g. `lv2`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub level: Option<String>,
     /// Level slab thickness cm.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub slab: Option<f64>,
-    /// Wall type id (sets thickness unless `t` is given); `none` clears.
+    /// Wall type id (sets thickness unless `t`); `none` clears.
     #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
     pub kind: Option<String>,
     /// Wall finish on the left of a→b; `none` clears.
@@ -778,11 +775,11 @@ pub(crate) struct UpdateSpec {
     /// Room ceiling finish.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ceil_mat: Option<String>,
-    /// Furniture brand (references).
+    /// Furniture brand.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub brand: Option<String>,
-    /// Role independent of the name: `trim`, `backsplash`, `counter`,
-    /// `stair`; empty: automatic.
+    /// Role, whatever the name: trim, backsplash, counter, stair; empty:
+    /// automatic.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub role: Option<String>,
     /// Furniture commercial model.
@@ -791,6 +788,13 @@ pub(crate) struct UpdateSpec {
     /// Furniture product link.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub url: Option<String>,
+    /// Shop product id; `""` clears.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub product: Option<String>,
+    /// With a product, bought unless `existing` or `excluded`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(extend("enum" = ["buy", "existing", "excluded"]))]
+    pub purchase: Option<String>,
     /// Label bold text.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub bold: Option<bool>,
@@ -804,7 +808,7 @@ pub(crate) struct UpdateSpec {
     /// Label italic text.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub italic: Option<bool>,
-    /// Label alignment: `left`, `center`, `right`.
+    /// Label alignment.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub align: Option<newera_core::TextAlign>,
 }
@@ -900,6 +904,8 @@ pub(crate) fn update(doc: &mut Document, items: Vec<UpdateSpec>) -> EditResult<(
                 "brand",
                 "model_name",
                 "url",
+                "product",
+                "purchase",
             ],
         };
         if let Some(bad) = spec
@@ -1102,6 +1108,10 @@ pub(crate) fn update(doc: &mut Document, items: Vec<UpdateSpec>) -> EditResult<(
                 f.info.brand = text(spec.brand, f.info.brand.take());
                 f.info.model_name = text(spec.model_name, f.info.model_name.take());
                 f.info.url = text(spec.url, f.info.url.take());
+                f.info.product = text(spec.product, f.info.product.take());
+                if let Some(raw) = &spec.purchase {
+                    f.info.purchase = Some(purchase(raw)?);
+                }
                 if let Some(layer) = &spec.layer {
                     set_layer(&mut f, layer)?;
                 }
@@ -1222,7 +1232,26 @@ pub(crate) fn rename(doc: &mut Document, spec: &RenameSpec) -> EditResult<()> {
 
 /// Fields a part of a group takes on its own: what it is called and what it
 /// is, never where it is or how big — the group owns that and rebuilds it.
-const PART_FIELDS: [&str; 6] = ["id", "name", "brand", "model_name", "url", "layer"];
+const PART_FIELDS: [&str; 8] = [
+    "id",
+    "name",
+    "brand",
+    "model_name",
+    "url",
+    "product",
+    "purchase",
+    "layer",
+];
+
+/// What the takeoff does with a piece, by its name.
+fn purchase(raw: &str) -> EditResult<newera_core::Purchase> {
+    match raw {
+        "buy" => Ok(newera_core::Purchase::Buy),
+        "existing" => Ok(newera_core::Purchase::Existing),
+        "excluded" => Ok(newera_core::Purchase::Excluded),
+        other => Err(format!("purchase: buy, existing or excluded (not {other})")),
+    }
+}
 
 /// What an item set into joinery — a sink bowl, a cooktop, an oven — takes
 /// besides: its own finish. It is not rebuilt with its host but carried
@@ -1348,6 +1377,10 @@ fn rename_part(
     piece.info.brand = text(spec.brand, piece.info.brand.take());
     piece.info.model_name = text(spec.model_name, piece.info.model_name.take());
     piece.info.url = text(spec.url, piece.info.url.take());
+    piece.info.product = text(spec.product, piece.info.product.take());
+    if let Some(raw) = &spec.purchase {
+        piece.info.purchase = Some(purchase(raw)?);
+    }
     if let Some(layer) = &spec.layer {
         set_layer(piece, layer)?;
     }
