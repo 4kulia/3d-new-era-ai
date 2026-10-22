@@ -261,8 +261,8 @@ pub async fn download(links: &Links, url: &str) -> anyhow::Result<Result<Vec<u8>
 /// # Errors
 ///
 /// When the database fails.
-pub async fn keep(
-    db: &PgPool,
+pub async fn keep<'e>(
+    db: impl sqlx::PgExecutor<'e>,
     product: &str,
     bytes: Vec<u8>,
     source: Source,
@@ -278,7 +278,7 @@ pub async fn keep(
          values ($1, $2, 'model', 'model.glb', 'model/gltf-binary', $3, $4, $5, $6)
          on conflict (product_id) where kind = 'model' do update set
              data = excluded.data, size = excluded.size, source = excluded.source,
-             generator = excluded.generator, basis = null, created_at = now()",
+             generator = excluded.generator, basis = null, job_id = null, created_at = now()",
     )
     .bind(secret::id())
     .bind(product)

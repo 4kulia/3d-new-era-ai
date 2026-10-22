@@ -1,0 +1,6 @@
+line-length = 130
+target-version = "py312"
+
+[lint]
+select = ["E", "F", "W", "I", "UP", "B", "PL", "RUF"]
+ignore = ["PLR2004"]

@@ -119,6 +119,7 @@
     ["refresh the price of a product", "edit_products"],
     ["delete an imported product", "edit_products"],
     ["attach a 3d model glb file to a shop product", "edit_products"],
+    ["generate a 3d model of a product from its photo", "edit_products"],
     ["import a praxis tile with its m2 per pack", "import_product"],
     ["show the price history of a product", "products"],
     ["put tiles on the bathroom wall up to 120 cm", "edit_finishes"],

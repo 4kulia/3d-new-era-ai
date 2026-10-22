@@ -440,6 +440,12 @@ fn product_fields() -> Vec<(&'static str, Value)> {
                 "Its 3D model, once it has one: [kind (model), source (shop, generated or placeholder), generator, bytes, kept (unix seconds)]",
             ),
         ),
+        (
+            "job",
+            object(
+                "Its 3D model being made on the server: {id, status (queued, running, done or failed), error?, attempts, updated (unix seconds)}",
+            ),
+        ),
     ]
 }
 

@@ -1,5 +1,5 @@
 {
-  "total": 135716,
+  "total": 136170,
   "tools": {
     "accept": {
       "total": 1360,
@@ -152,10 +152,10 @@
       "output": 592
     },
     "edit_products": {
-      "total": 1963,
-      "description": 527,
-      "input": 779,
-      "output": 442
+      "total": 2225,
+      "description": 718,
+      "input": 826,
+      "output": 466
     },
     "edit_variants": {
       "total": 1020,
@@ -242,10 +242,10 @@
       "output": 481
     },
     "import_product": {
-      "total": 1581,
-      "description": 490,
+      "total": 1749,
+      "description": 634,
       "input": 388,
-      "output": 484
+      "output": 508
     },
     "joinery": {
       "total": 3078,
@@ -320,10 +320,10 @@
       "output": 274
     },
     "products": {
-      "total": 1162,
+      "total": 1186,
       "description": 309,
       "input": 224,
-      "output": 446
+      "output": 470
     },
     "projects": {
       "total": 633,

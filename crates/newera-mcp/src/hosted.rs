@@ -39,8 +39,8 @@ pub(crate) struct ProductsSchema {
 pub(crate) struct EditProductsSchema {
     /// The product, as `import_product` or `products` gave it
     id: String,
-    /// `set` fills in or corrects fields; `refresh` reads the shop again for today's price; `attach_model` gives it a 3D model; `remove` deletes the product
-    #[schemars(extend("enum" = ["set", "refresh", "attach_model", "remove"]))]
+    /// `set` fills in or corrects fields; `refresh` reads the shop again for today's price; `attach_model` gives it a 3D model; `generate` has the server make one; `remove` deletes the product
+    #[schemars(extend("enum" = ["set", "refresh", "attach_model", "generate", "remove"]))]
     action: String,
     /// For `set`: field → value, e.g. `{"price": "24.54", "pack_m2": 1.62, "width_cm": 80}`
     fields: Option<serde_json::Map<String, serde_json::Value>>,
@@ -97,11 +97,11 @@ pub(crate) struct EditEstimateSchema {
 
 const PROJECTS: &str = "The projects kept in the account: rows [name, id, kb, updated, active], the space used and the plan's limits. file action=open switches the active one; action=new starts one.";
 
-const IMPORT_PRODUCT: &str = "Import a product from a shop's link into the account's library: a piece (a cabinet, a sofa…) or a finish (tile, laminate, paint, wallpaper) with its price, pack and coverage. The same article imported again is the one kept, not fetched twice. Reply: id, shop, kind, fields {name: {value, evidence, from}} — evidence is adapter, text, market or agent — missing (what the shop did not show, for edit_products to fill), fetched (calls made and their credits). products lists the library.";
+const IMPORT_PRODUCT: &str = "Import a product from a shop's link into the account's library: a piece (a cabinet, a sofa…) or a finish (tile, laminate, paint, wallpaper) with its price, pack and coverage. The same article imported again is the one kept, not fetched twice. A piece whose shop shows a picture and its width, depth and height gets a 3D model made on the server at that size. Reply: id, shop, kind, fields {name: {value, evidence, from}} — evidence is adapter, text, market or agent — missing (what the shop did not show, for edit_products to fill), fetched (calls made and their credits), job (the model being made). products lists the library.";
 
 const PRODUCTS: &str = "The account's library of shop products: rows [id, kind, shop, title, price, currency, sale_unit, missing], or with id one product in full — its fields and where each came from, what is missing, and its price history. import_product adds one; edit_products fills fields, fetches today's price or removes one.";
 
-const EDIT_PRODUCTS: &str = "Change a product in the library. set {fields}: fill in or correct fields (price, pack_m2, width_cm…), kept as the agent's; refresh: read the shop again for today's price, VAT and price per unit, which replace the old ones and are added to the price history (title, size and pack stay as they are); attach_model {url, generator?}: keep the .glb at url as its 3D file, which place draws and which replaces its placeholder where it is open; remove: delete it. Reply: the product as products shows it. products reads the library.";
+const EDIT_PRODUCTS: &str = "Change a product in the library. set {fields}: fill in or correct fields (price, pack_m2, width_cm…), kept as the agent's; refresh: read the shop again for today's price, VAT and price per unit, which replace the old ones and are added to the price history (title, size and pack stay as they are); attach_model {url, generator?}: keep the .glb at url as its 3D file, which place draws and which replaces its placeholder where it is open; generate: have the server make its 3D file from its picture (field image, https) at its width, depth and height (all three set), replacing the placeholder when done (products shows the job); remove: delete it. Reply: the product as products shows it. products reads the library.";
 
 const ESTIMATE: &str = "What the project costs: every shop product it uses — finishes by their m² with waste and coats, in whole packs, cans or rolls; furniture by the piece or pack — priced from the library, with the lines added by hand. Reply: groups {name, lines, totals}; lines {kind, shop, title, url, quantity, unit, unit_price, currency, vat_included, total, rooms, surfaces, notes}; totals per shop, currency and VAT (included, excluded, unknown), complete false while a line is unpriced; note when an open editor's project is not the one priced; saved lists the saved ones. takeoff measures; edit_estimate adds lines and saves.";
 

@@ -40,6 +40,10 @@ async fn main() -> anyhow::Result<()> {
     let port = config.port;
     let state = newera_cloud::AppState::start(config, db.clone()).await?;
 
+    // Furniture models generated from their photos, jobs resumed from the
+    // table.
+    let _generation = newera_cloud::generation::start(state.clone());
+
     // Projects nobody touched for half an hour leave memory; they are kept.
     let engine = state.engine.clone();
     tokio::spawn(async move {

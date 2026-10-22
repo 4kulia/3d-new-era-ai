@@ -219,6 +219,9 @@ async fn shown(db: &PgPool, row: &Row) -> sqlx::Result<Value> {
             .map(|(kind, source, generator, size, at)| json!([kind, source, generator, size, at]))
             .collect();
     }
+    if let Some(job) = crate::generation::latest(db, &row.id).await? {
+        shown["job"] = job;
+    }
     // Unknown is absent, like every default: the title is text or not there.
     if let Some(title) = row.title() {
         shown["title"] = title;
@@ -367,6 +370,15 @@ async fn fetch_and_keep(
     let stored = made.is_none();
     if !stored {
         remember_price(&app.db, &id, &got.fields).await?;
+        // A piece imported with a photo and its size has its model made
+        // from it.
+        if got.kind == Kind::Furniture
+            && app.config.generator.is_some()
+            && crate::generation::photo(&got.fields).is_some()
+            && crate::generation::size(&got.fields).is_some()
+        {
+            crate::generation::enqueue(&app, &account, &id).await?;
+        }
     }
     let Some(row) = by_identity(&app.db, &account, &identity).await? else {
         anyhow::bail!("the product just written is gone");
@@ -437,9 +449,12 @@ async fn edit(app: &AppState, account: &str, args: &Value) -> anyhow::Result<Val
         ));
     };
     let action = args["action"].as_str().unwrap_or_default();
-    if !matches!(action, "set" | "refresh" | "attach_model" | "remove") {
+    if !matches!(
+        action,
+        "set" | "refresh" | "attach_model" | "generate" | "remove"
+    ) {
         return Ok(refused(
-            "edit_products: action is set, refresh, attach_model or remove",
+            "edit_products: action is set, refresh, attach_model, generate or remove",
         ));
     }
     let Some(row) = by_id(&app.db, account, id).await? else {
@@ -455,6 +470,7 @@ async fn edit(app: &AppState, account: &str, args: &Value) -> anyhow::Result<Val
         }
         "set" => set(&app.db, row, args).await,
         "attach_model" => attach_model(app, account, &row, args).await,
+        "generate" => generate(app, account, &row).await,
         _ => refresh(app, account, row).await,
     }
 }
@@ -509,6 +525,37 @@ async fn attach_model(
     let mut answer = shown(&app.db, row).await?;
     answer["drawn"] = json!(drawn);
     Ok(said(&answer))
+}
+
+/// What the tools say when this server has no 3D generator.
+pub const NO_GENERATOR: &str = "3D generation is not configured on this server (it has no NEWERA_GENERATOR_URL): edit_products action=attach_model gives the product a model";
+
+/// Has the product's model made from its photo (`crate::generation`): a
+/// job, or the one already open; `products id=` shows how it goes.
+async fn generate(app: &AppState, account: &str, row: &Row) -> anyhow::Result<Value> {
+    if app.config.generator.is_none() {
+        return Ok(refused(NO_GENERATOR));
+    }
+    if row.kind() != Kind::Furniture {
+        return Ok(refused(format!(
+            "{} is a finish: a 3D model is for a piece of furniture",
+            row.id
+        )));
+    }
+    if crate::generation::photo(&row.fields).is_none() {
+        return Ok(refused(format!(
+            "{} has no photo to make a model from: edit_products action=set fields image (an https link to it) first",
+            row.id
+        )));
+    }
+    if crate::generation::size(&row.fields).is_none() {
+        return Ok(refused(format!(
+            "{} has no width, depth and height to make its model at: edit_products action=set fields width_cm, depth_cm, height_cm first",
+            row.id
+        )));
+    }
+    crate::generation::enqueue(app, account, &row.id).await?;
+    Ok(said(&shown(&app.db, row).await?))
 }
 
 /// Fills or corrects fields as the agent's; `kind` changes what the

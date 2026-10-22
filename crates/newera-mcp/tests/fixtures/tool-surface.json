@@ -2786,15 +2786,16 @@
       "readOnlyHint": false,
       "title": "Change shop products"
     },
-    "description": "Change a product in the library. set {fields}: fill in or correct fields (price, pack_m2, width_cm…), kept as the agent's; refresh: read the shop again for today's price, VAT and price per unit, which replace the old ones and are added to the price history (title, size and pack stay as they are); attach_model {url, generator?}: keep the .glb at url as its 3D file, which place draws and which replaces its placeholder where it is open; remove: delete it. Reply: the product as products shows it. products reads the library.",
+    "description": "Change a product in the library. set {fields}: fill in or correct fields (price, pack_m2, width_cm…), kept as the agent's; refresh: read the shop again for today's price, VAT and price per unit, which replace the old ones and are added to the price history (title, size and pack stay as they are); attach_model {url, generator?}: keep the .glb at url as its 3D file, which place draws and which replaces its placeholder where it is open; generate: have the server make its 3D file from its picture (field image, https) at its width, depth and height (all three set), replacing the placeholder when done (products shows the job); remove: delete it. Reply: the product as products shows it. products reads the library.",
     "inputSchema": {
       "properties": {
         "action": {
-          "description": "`set` fills in or corrects fields; `refresh` reads the shop again for today's price; `attach_model` gives it a 3D model; `remove` deletes the product",
+          "description": "`set` fills in or corrects fields; `refresh` reads the shop again for today's price; `attach_model` gives it a 3D model; `generate` has the server make one; `remove` deletes the product",
           "enum": [
             "set",
             "refresh",
             "attach_model",
+            "generate",
             "remove"
           ],
           "type": "string"
@@ -2840,6 +2841,9 @@
         },
         "id": {
           "type": "string"
+        },
+        "job": {
+          "type": "object"
         },
         "kind": {
           "type": "string"
@@ -3984,7 +3988,7 @@
       "readOnlyHint": false,
       "title": "Import a shop product"
     },
-    "description": "Import a product from a shop's link into the account's library: a piece (a cabinet, a sofa…) or a finish (tile, laminate, paint, wallpaper) with its price, pack and coverage. The same article imported again is the one kept, not fetched twice. Reply: id, shop, kind, fields {name: {value, evidence, from}} — evidence is adapter, text, market or agent — missing (what the shop did not show, for edit_products to fill), fetched (calls made and their credits). products lists the library.",
+    "description": "Import a product from a shop's link into the account's library: a piece (a cabinet, a sofa…) or a finish (tile, laminate, paint, wallpaper) with its price, pack and coverage. The same article imported again is the one kept, not fetched twice. A piece whose shop shows a picture and its width, depth and height gets a 3D model made on the server at that size. Reply: id, shop, kind, fields {name: {value, evidence, from}} — evidence is adapter, text, market or agent — missing (what the shop did not show, for edit_products to fill), fetched (calls made and their credits), job (the model being made). products lists the library.",
     "inputSchema": {
       "properties": {
         "kind": {
@@ -4022,6 +4026,9 @@
         },
         "id": {
           "type": "string"
+        },
+        "job": {
+          "type": "object"
         },
         "kind": {
           "type": "string"
@@ -5305,6 +5312,9 @@
         },
         "id": {
           "type": "string"
+        },
+        "job": {
+          "type": "object"
         },
         "kind": {
           "type": "string"

@@ -48,10 +48,11 @@ async fn service_full(
     mail: Mail,
     http: Option<reqwest::Client>,
 ) -> Option<(String, AppState)> {
-    service_configured(sites, allowed, google, mail, http, None).await
+    service_configured(sites, allowed, google, mail, http, None, None).await
 }
 
-/// The same, reading shop products through `anysite`.
+/// The same, reading shop products through `anysite` and having furniture
+/// models made by `generator`.
 async fn service_configured(
     sites: Vec<String>,
     allowed: AllowedEmails,
@@ -59,6 +60,7 @@ async fn service_configured(
     mail: Mail,
     http: Option<reqwest::Client>,
     anysite: Option<newera_shop::AnySite>,
+    generator: Option<newera_cloud::config::Generator>,
 ) -> Option<(String, AppState)> {
     let Ok(admin) = std::env::var("TEST_DATABASE_URL") else {
         eprintln!("TEST_DATABASE_URL not set: skipping");
@@ -97,6 +99,7 @@ async fn service_configured(
         allowed_emails: allowed,
         port: 0,
         anysite,
+        generator,
     };
     let mut state = AppState::start(config, db).await.expect("startup");
     if let Some(http) = http {
@@ -2826,6 +2829,7 @@ async fn shop_service_on(
         Mail::Log,
         None,
         Some(anysite),
+        None,
     )
     .await?;
     Some((base, state, calls))
@@ -5921,4 +5925,1220 @@ async fn a_model_over_the_plans_storage_is_not_kept() {
         .await
         .unwrap();
     assert_eq!(kept, 0);
+}
+
+// -------------------------------------------------------- generated models
+
+/// What the stand-in generator answers when asked after a job.
+#[derive(Debug, Clone)]
+enum Said {
+    Queued,
+    Running,
+    Failed(&'static str),
+    Refused(&'static str),
+    Lost,
+    Broken,
+    Model(Vec<u8>),
+}
+
+/// The token the stand-in generator takes.
+const GENERATOR_TOKEN: &str = "generator-test-token";
+
+/// The generator on the Spark, stood in for on a local port: it takes every
+/// job it is given, the token checked, and keeps what it was asked; each
+/// question after a job gets the next answer of its script, and the last
+/// one again once the script is spent. A photo whose link says `refused`
+/// it turns away, as it does a link that is not https, and a size over
+/// 2000 cm.
+#[derive(Debug, Clone, Default)]
+struct StandInGenerator {
+    asked: std::sync::Arc<std::sync::Mutex<Vec<Value>>>,
+    polled: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+    script: std::sync::Arc<std::sync::Mutex<std::collections::VecDeque<Said>>>,
+}
+
+impl StandInGenerator {
+    fn say(&self, answers: Vec<Said>) {
+        *self.script.lock().unwrap() = answers.into();
+    }
+
+    fn asked(&self) -> Vec<Value> {
+        self.asked.lock().unwrap().clone()
+    }
+
+    fn polled(&self) -> Vec<String> {
+        self.polled.lock().unwrap().clone()
+    }
+
+    fn next(&self) -> Said {
+        let mut script = self.script.lock().unwrap();
+        if script.len() > 1 {
+            script.pop_front().unwrap()
+        } else {
+            script.front().cloned().expect("a script")
+        }
+    }
+
+    /// Serves on `listener` until the test ends.
+    fn serve(&self, listener: tokio::net::TcpListener) {
+        use axum::extract::{Path, State};
+        use axum::http::{HeaderMap, StatusCode, header};
+        use axum::response::{IntoResponse, Response};
+
+        fn admitted(headers: &HeaderMap) -> bool {
+            headers
+                .get("x-generator-token")
+                .is_some_and(|t| t == GENERATOR_TOKEN)
+        }
+        let app = axum::Router::new()
+            .route(
+                "/generate",
+                axum::routing::post(
+                    |State(me): State<Self>,
+                     headers: HeaderMap,
+                     axum::Json(body): axum::Json<Value>| async move {
+                        if !admitted(&headers) {
+                            return StatusCode::UNAUTHORIZED.into_response();
+                        }
+                        if body["image_url"].as_str().is_some_and(|u| u.contains("refused")) {
+                            return (
+                                StatusCode::UNPROCESSABLE_ENTITY,
+                                axum::Json(json!({"error": "image_url is an https link to the product's photo", "field": "image_url"})),
+                            )
+                                .into_response();
+                        }
+                        if body["size_cm"]
+                            .as_array()
+                            .is_some_and(|size| size.iter().any(|cm| cm.as_f64().unwrap_or(0.0) > 2000.0))
+                        {
+                            return (
+                                StatusCode::UNPROCESSABLE_ENTITY,
+                                axum::Json(json!({"error": "size_cm is three numbers, width, depth and height, each above 0 and up to 2000 cm", "field": "size_cm"})),
+                            )
+                                .into_response();
+                        }
+                        let mut asked = me.asked.lock().unwrap();
+                        asked.push(body);
+                        let job = format!("g{}", asked.len());
+                        (
+                            StatusCode::ACCEPTED,
+                            axum::Json(json!({"job": job, "status": "queued"})),
+                        )
+                            .into_response()
+                    },
+                ),
+            )
+            .route(
+                "/jobs/{id}",
+                axum::routing::get(
+                    |State(me): State<Self>, headers: HeaderMap, Path(id): Path<String>| async move {
+                        if !admitted(&headers) {
+                            return StatusCode::UNAUTHORIZED.into_response();
+                        }
+                        me.polled.lock().unwrap().push(id);
+                        let answer: Response = match me.next() {
+                            Said::Queued => axum::Json(json!({"status": "queued"})).into_response(),
+                            Said::Running => {
+                                axum::Json(json!({"status": "running"})).into_response()
+                            }
+                            Said::Failed(why) => {
+                                axum::Json(json!({"status": "failed", "error": why, "permanent": false}))
+                                    .into_response()
+                            }
+                            Said::Refused(why) => {
+                                axum::Json(json!({"status": "failed", "error": why, "permanent": true}))
+                                    .into_response()
+                            }
+                            Said::Broken => (
+                                StatusCode::INTERNAL_SERVER_ERROR,
+                                "Internal Server Error",
+                            )
+                                .into_response(),
+                            Said::Lost => (
+                                StatusCode::NOT_FOUND,
+                                axum::Json(json!({"error": "no job"})),
+                            )
+                                .into_response(),
+                            Said::Model(bytes) => {
+                                ([(header::CONTENT_TYPE, "model/gltf-binary")], bytes)
+                                    .into_response()
+                            }
+                        };
+                        answer
+                    },
+                ),
+            )
+            .with_state(self.clone());
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    }
+}
+
+/// A free local port, not listened on: the generator's address while it is
+/// down.
+async fn free_port() -> std::net::SocketAddr {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    listener.local_addr().unwrap()
+}
+
+/// The stand-in generator, up on a port of its own: it and its address.
+async fn generator_up(script: Vec<Said>) -> (StandInGenerator, String) {
+    let stand_in = StandInGenerator::default();
+    stand_in.say(script);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    stand_in.serve(listener);
+    (stand_in, url)
+}
+
+/// The service, its models made by the generator at `url`, retries waiting
+/// `backoff` and doubling.
+async fn generating_service(
+    url: &str,
+    backoff: std::time::Duration,
+    anysite: Option<newera_shop::AnySite>,
+) -> Option<(String, AppState)> {
+    generating_service_stalling(url, backoff, std::time::Duration::from_secs(600), anysite).await
+}
+
+/// The same, a job the generator holds longer than `stall` given again.
+async fn generating_service_stalling(
+    url: &str,
+    backoff: std::time::Duration,
+    stall: std::time::Duration,
+    anysite: Option<newera_shop::AnySite>,
+) -> Option<(String, AppState)> {
+    service_configured(
+        vec![SITE.to_owned()],
+        AllowedEmails::default(),
+        None,
+        Mail::Log,
+        None,
+        anysite,
+        Some(newera_cloud::config::Generator {
+            url: url.to_owned(),
+            token: GENERATOR_TOKEN.to_owned(),
+            poll: std::time::Duration::from_millis(20),
+            backoff,
+            stall,
+        }),
+    )
+    .await
+}
+
+/// What the generator makes in the tests: a bookcase, as a GLB.
+fn generated_glb() -> Vec<u8> {
+    newera_cloud::models::placeholder_glb(&newera_cloud::models::Look {
+        catalog: Some("bookcase"),
+        size: [80.0, 28.0, 202.0],
+        colour: Some([250, 250, 250]),
+    })
+}
+
+/// A sofa with a photo, 200×90×80 cm, with no model.
+async fn stock_photographed_sofa(state: &AppState, email: &str, id: &str) {
+    stock_sofa_photographed_at(
+        state,
+        email,
+        id,
+        "https://www.ikea.com/nl/nl/images/products/sofa.jpg",
+    )
+    .await;
+}
+
+async fn stock_sofa_photographed_at(state: &AppState, email: &str, id: &str, image: &str) {
+    let account = account_id(state, email).await;
+    stock(
+        state,
+        &account,
+        id,
+        &format!("https://www.ikea.com/nl/nl/p/{id}/"),
+        "furniture",
+        json!({"title": "Sofa", "product_type": "3-zitsbank / Sofa", "colour_hex": "#eeebe1",
+               "image": image, "width_cm": 200.0, "depth_cm": 90.0, "height_cm": 80.0}),
+    )
+    .await;
+}
+
+/// The product's 3D job, as `products id=` shows it.
+async fn job_of(base: &str, access: &str, id: &str) -> Value {
+    fields_of(&tool(base, access, "products", json!({"id": id})).await)["job"].clone()
+}
+
+/// The product's job once `reached` holds for it, asked every 20 ms for up
+/// to 15 s.
+async fn job_when(base: &str, access: &str, id: &str, reached: impl Fn(&Value) -> bool) -> Value {
+    for _ in 0..750 {
+        let job = job_of(base, access, id).await;
+        if reached(&job) {
+            return job;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    panic!(
+        "the job of {id} never got there: {}",
+        job_of(base, access, id).await
+    );
+}
+
+async fn kept_model(state: &AppState, id: &str) -> (String, Option<String>, Vec<u8>) {
+    sqlx::query_as(
+        "select source, generator, data from product_assets where product_id = $1 and kind = 'model'",
+    )
+    .bind(id)
+    .fetch_one(&state.db)
+    .await
+    .unwrap()
+}
+
+/// An imported piece with a photo has a job: the worker hands the photo and
+/// the shop's size to the generator, follows it from queued through running,
+/// and keeps the model it makes as the product's, generated. Imported again,
+/// the product brings its job, not a new one; `generate` asks for a new one,
+/// and while it is open, asking again is the same job.
+#[tokio::test]
+async fn an_imported_piece_has_its_model_made_from_its_photo() {
+    let (stand_in, url) = generator_up(vec![Said::Queued, Said::Running]).await;
+    let (anysite, _) = anysite(SHOPS).await;
+    let Some((base, state)) =
+        generating_service(&url, std::time::Duration::from_millis(100), Some(anysite)).await
+    else {
+        return;
+    };
+    let (_, access, _) = credentials(&base, &state, "buyer@example.com").await;
+    let link = "https://www.ikea.com/nl/nl/p/billy-boekenkast-wit-00263850/";
+    let imported = fields_of(&tool(&base, &access, "import_product", json!({"url": link})).await);
+    let id = imported["id"].as_str().unwrap().to_owned();
+    let job = imported["job"].clone();
+    assert_eq!(
+        job,
+        json!({"id": job["id"], "status": "queued", "attempts": 0, "updated": job["updated"]})
+    );
+    assert!(job["id"].is_string(), "{job}");
+    assert_eq!(stand_in.asked(), Vec::<Value>::new(), "no worker yet");
+
+    let worker = newera_cloud::generation::start(state.clone()).expect("a generator");
+    let running = job_when(&base, &access, &id, |j| j["status"] == "running").await;
+    assert_eq!(
+        running,
+        json!({"id": job["id"], "status": "running", "attempts": 0, "updated": running["updated"]})
+    );
+    assert_eq!(
+        stand_in.asked(),
+        [json!({
+            "image_url": "https://www.ikea.com/nl/nl/images/products/billy-boekenkast-wit__1590272_pe1038911_s5.jpg",
+            "size_cm": [80.0, 28.0, 202.0],
+        })]
+    );
+    stand_in.say(vec![Said::Model(generated_glb())]);
+    let done = job_when(&base, &access, &id, |j| j["status"] == "done").await;
+    assert_eq!(
+        done,
+        json!({"id": job["id"], "status": "done", "attempts": 0, "updated": done["updated"]})
+    );
+    assert_eq!(
+        kept_model(&state, &id).await,
+        (
+            "generated".to_owned(),
+            Some("hunyuan3d-2.0-m".to_owned()),
+            generated_glb()
+        )
+    );
+    assert!(
+        stand_in.polled().iter().all(|p| p == "g1"),
+        "{:?}",
+        stand_in.polled()
+    );
+    worker.abort();
+    let owner = |db: sqlx::PgPool, id: String| async move {
+        sqlx::query_scalar::<_, Option<String>>(
+            "select job_id from product_assets where product_id = $1 and kind = 'model'",
+        )
+        .bind(id)
+        .fetch_one(&db)
+        .await
+        .unwrap()
+    };
+    assert_eq!(
+        owner(state.db.clone(), id.clone()).await.as_deref(),
+        job["id"].as_str(),
+        "the model is the job's"
+    );
+    let files = model_server().await;
+    state.links.allow_for_tests("127.0.0.1".parse().unwrap());
+    let attached = tool(
+        &base,
+        &access,
+        "edit_products",
+        json!({"id": id, "action": "attach_model", "url": format!("{files}/sofa.glb")}),
+    )
+    .await;
+    assert_eq!(attached["isError"], false, "{attached}");
+    assert_eq!(
+        owner(state.db.clone(), id.clone()).await,
+        None,
+        "a model attached is no job's"
+    );
+
+    let again = fields_of(&tool(&base, &access, "import_product", json!({"url": link})).await);
+    assert_eq!(again["job"], done, "the product's job, no new one");
+    let regenerated = fields_of(
+        &tool(
+            &base,
+            &access,
+            "edit_products",
+            json!({"id": id, "action": "generate"}),
+        )
+        .await,
+    );
+    let fresh = regenerated["job"].clone();
+    assert_eq!(
+        fresh,
+        json!({"id": fresh["id"], "status": "queued", "attempts": 0, "updated": fresh["updated"]})
+    );
+    assert_ne!(fresh["id"], job["id"]);
+    let asked_again = fields_of(
+        &tool(
+            &base,
+            &access,
+            "edit_products",
+            json!({"id": id, "action": "generate"}),
+        )
+        .await,
+    );
+    assert_eq!(asked_again["job"]["id"], fresh["id"], "one open job");
+    let jobs: i64 = sqlx::query_scalar("select count(*) from product_jobs")
+        .fetch_one(&state.db)
+        .await
+        .unwrap();
+    assert_eq!(jobs, 2);
+}
+
+/// A job the generator fails on is given again after a wait, and failed for
+/// good once its tries are spent; nothing is kept.
+#[tokio::test]
+async fn a_failing_generation_is_tried_a_bounded_number_of_times() {
+    let (stand_in, url) = generator_up(vec![Said::Failed("CUDA out of memory")]).await;
+    let Some((base, state)) =
+        generating_service(&url, std::time::Duration::from_millis(50), None).await
+    else {
+        return;
+    };
+    let (_, access, _) = credentials(&base, &state, "a@example.com").await;
+    stock_photographed_sofa(&state, "a@example.com", "p1").await;
+    let asked = fields_of(
+        &tool(
+            &base,
+            &access,
+            "edit_products",
+            json!({"id": "p1", "action": "generate"}),
+        )
+        .await,
+    );
+    let _worker = newera_cloud::generation::start(state.clone()).expect("a generator");
+    let failed = job_when(&base, &access, "p1", |j| j["status"] == "failed").await;
+    assert_eq!(
+        failed,
+        json!({"id": asked["job"]["id"], "status": "failed", "attempts": 5,
+               "error": "the generator failed: CUDA out of memory; gave up after 5 tries",
+               "updated": failed["updated"]})
+    );
+    assert_eq!(
+        stand_in.asked().len(),
+        5,
+        "each try is a job of its own: {:?}",
+        stand_in.asked()
+    );
+    let kept: i64 = sqlx::query_scalar("select count(*) from product_assets")
+        .fetch_one(&state.db)
+        .await
+        .unwrap();
+    assert_eq!(kept, 0);
+}
+
+/// A generator that cannot be reached is waited for: the job says why and
+/// that it is tried again, and once the generator is up its model is made
+/// and kept.
+#[tokio::test]
+async fn an_unreachable_generator_is_waited_for() {
+    let down = free_port().await;
+    let Some((base, state)) = generating_service(
+        &format!("http://{down}"),
+        std::time::Duration::from_millis(300),
+        None,
+    )
+    .await
+    else {
+        return;
+    };
+    let (_, access, _) = credentials(&base, &state, "a@example.com").await;
+    stock_photographed_sofa(&state, "a@example.com", "p1").await;
+    let _ = tool(
+        &base,
+        &access,
+        "edit_products",
+        json!({"id": "p1", "action": "generate"}),
+    )
+    .await;
+    let _worker = newera_cloud::generation::start(state.clone()).expect("a generator");
+    let waiting = job_when(&base, &access, "p1", |j| j["attempts"] == 1).await;
+    let why = waiting["error"].as_str().unwrap();
+    assert!(
+        why.starts_with("the generator is unreachable: ") && why.ends_with("; trying again"),
+        "{why}"
+    );
+    assert_eq!(waiting["status"], "queued");
+
+    let stand_in = StandInGenerator::default();
+    stand_in.say(vec![Said::Running]);
+    stand_in.serve(tokio::net::TcpListener::bind(down).await.unwrap());
+    let running = job_when(&base, &access, "p1", |j| j["status"] == "running").await;
+    assert_eq!(
+        running.get("error"),
+        None,
+        "what went wrong is over: {running}"
+    );
+    stand_in.say(vec![Said::Model(generated_glb())]);
+    let done = job_when(&base, &access, "p1", |j| j["status"] == "done").await;
+    let tries = done["attempts"].as_i64().unwrap();
+    assert!((1..5).contains(&tries), "{done}");
+    assert_eq!(
+        done,
+        json!({"id": waiting["id"], "status": "done", "attempts": tries, "updated": done["updated"]})
+    );
+    assert_eq!(stand_in.asked().len(), 1);
+    assert_eq!(kept_model(&state, "p1").await.2, generated_glb());
+}
+
+/// A job the generator has is asked after again by the service started
+/// anew: it is not given twice.
+#[tokio::test]
+async fn a_job_in_flight_resumes_after_a_restart() {
+    let (stand_in, url) = generator_up(vec![Said::Running]).await;
+    let Some((base, state)) =
+        generating_service(&url, std::time::Duration::from_millis(100), None).await
+    else {
+        return;
+    };
+    let (_, access, _) = credentials(&base, &state, "a@example.com").await;
+    stock_photographed_sofa(&state, "a@example.com", "p1").await;
+    let _ = tool(
+        &base,
+        &access,
+        "edit_products",
+        json!({"id": "p1", "action": "generate"}),
+    )
+    .await;
+    let worker = newera_cloud::generation::start(state.clone()).expect("a generator");
+    let running = job_when(&base, &access, "p1", |j| j["status"] == "running").await;
+    worker.abort();
+    let _ = worker.await;
+
+    let (base, again) = restart(&state, AllowedEmails::default()).await;
+    stand_in.say(vec![Said::Model(generated_glb())]);
+    let _worker = newera_cloud::generation::start(again.clone()).expect("a generator");
+    let done = job_when(&base, &access, "p1", |j| j["status"] == "done").await;
+    assert_eq!(
+        done,
+        json!({"id": running["id"], "status": "done", "attempts": 0, "updated": done["updated"]})
+    );
+    assert_eq!(stand_in.asked().len(), 1, "given once");
+    assert!(
+        stand_in.polled().iter().all(|p| p == "g1"),
+        "{:?}",
+        stand_in.polled()
+    );
+    assert_eq!(kept_model(&again, "p1").await.2, generated_glb());
+}
+
+/// A generator that answers with an error is asked again after the same
+/// job; a job it no longer has (it restarted) is given to it again.
+#[tokio::test]
+async fn a_job_the_generator_lost_is_given_again() {
+    let (stand_in, url) =
+        generator_up(vec![Said::Broken, Said::Lost, Said::Model(generated_glb())]).await;
+    let Some((base, state)) =
+        generating_service(&url, std::time::Duration::from_millis(50), None).await
+    else {
+        return;
+    };
+    let (_, access, _) = credentials(&base, &state, "a@example.com").await;
+    stock_photographed_sofa(&state, "a@example.com", "p1").await;
+    let _ = tool(
+        &base,
+        &access,
+        "edit_products",
+        json!({"id": "p1", "action": "generate"}),
+    )
+    .await;
+    let _worker = newera_cloud::generation::start(state.clone()).expect("a generator");
+    let done = job_when(&base, &access, "p1", |j| j["status"] == "done").await;
+    assert_eq!(done["attempts"], 2, "{done}");
+    assert_eq!(stand_in.polled(), ["g1", "g1", "g2"]);
+    assert_eq!(stand_in.asked().len(), 2);
+}
+
+/// A model made for a product drawn as a placeholder replaces it in the
+/// project the server has open, which is saved with it.
+#[tokio::test]
+async fn a_generated_model_replaces_the_placeholder_in_the_open_project() {
+    let (stand_in, url) = generator_up(vec![Said::Model(generated_glb())]).await;
+    let Some((base, state)) =
+        generating_service(&url, std::time::Duration::from_millis(100), None).await
+    else {
+        return;
+    };
+    let (_, access, project) = drawn_project(&base, &state, "a@example.com").await;
+    stock_photographed_sofa(&state, "a@example.com", "p1").await;
+    // Asked for first, as an import does, and placed while it is made.
+    let _ = tool(
+        &base,
+        &access,
+        "edit_products",
+        json!({"id": "p1", "action": "generate"}),
+    )
+    .await;
+    let placed = tool(
+        &base,
+        &access,
+        "place",
+        json!({"items": [{"model": "product:p1", "at": [200, 150]}]}),
+    )
+    .await;
+    assert_eq!(placed["isError"], false, "{placed}");
+    let placeholder = kept_model(&state, "p1").await;
+    assert_eq!(placeholder.0, "placeholder");
+    let _worker = newera_cloud::generation::start(state.clone()).expect("a generator");
+    let _ = job_when(&base, &access, "p1", |j| j["status"] == "done").await;
+    assert_eq!(stand_in.asked().len(), 1);
+    let kept = kept_model(&state, "p1").await;
+    assert_eq!(
+        (kept.0.as_str(), kept.1.as_deref()),
+        ("generated", Some("hunyuan3d-2.0-m"))
+    );
+    let (_, bytes) = stored(&state, &project).await;
+    let (_, inside) = newera_core::project_from_bytes(&bytes).unwrap();
+    let file = inside
+        .iter()
+        .find(|(name, _)| name == "products/p1/model.glb")
+        .map(|(_, data)| data.clone());
+    assert_eq!(
+        file,
+        Some(generated_glb()),
+        "the stored project holds the made model"
+    );
+}
+
+/// A model attached while one is being made is the agent's word: the one
+/// made is not kept over it, and the job says so.
+#[tokio::test]
+async fn a_model_attached_while_one_is_made_stays() {
+    let (stand_in, url) = generator_up(vec![Said::Running]).await;
+    let Some((base, state)) =
+        generating_service(&url, std::time::Duration::from_millis(100), None).await
+    else {
+        return;
+    };
+    let files = model_server().await;
+    state.links.allow_for_tests("127.0.0.1".parse().unwrap());
+    let (_, access, _) = credentials(&base, &state, "a@example.com").await;
+    stock_photographed_sofa(&state, "a@example.com", "p1").await;
+    let _ = tool(
+        &base,
+        &access,
+        "edit_products",
+        json!({"id": "p1", "action": "generate"}),
+    )
+    .await;
+    let _worker = newera_cloud::generation::start(state.clone()).expect("a generator");
+    let _ = job_when(&base, &access, "p1", |j| j["status"] == "running").await;
+    let attached = tool(
+        &base,
+        &access,
+        "edit_products",
+        json!({"id": "p1", "action": "attach_model", "url": format!("{files}/sofa.glb")}),
+    )
+    .await;
+    assert_eq!(attached["isError"], false, "{attached}");
+    let shop = kept_model(&state, "p1").await;
+    stand_in.say(vec![Said::Model(generated_glb())]);
+    let failed = job_when(&base, &access, "p1", |j| j["status"] == "failed").await;
+    assert_eq!(
+        failed["error"],
+        "a model was attached while it was being made, and stays: edit_products action=generate makes a new one in its place"
+    );
+    assert_eq!(kept_model(&state, "p1").await, shop);
+    assert_eq!(shop.0, "shop");
+}
+
+/// `generate` says why where it cannot run: no generator on this server, a
+/// finish, a piece without a photo.
+#[tokio::test]
+async fn generate_is_refused_where_it_cannot_run() {
+    let Some((base, state)) = service().await else {
+        return;
+    };
+    let (_, access, _) = credentials(&base, &state, "a@example.com").await;
+    stock_photographed_sofa(&state, "a@example.com", "p1").await;
+    let generate = |id: &'static str, base: String, access: String| async move {
+        tool(
+            &base,
+            &access,
+            "edit_products",
+            json!({"id": id, "action": "generate"}),
+        )
+        .await
+    };
+    assert_eq!(
+        generate("p1", base.clone(), access.clone()).await,
+        refusal(newera_cloud::products::NO_GENERATOR)
+    );
+
+    let (_, url) = generator_up(vec![Said::Running]).await;
+    let Some((base, state)) =
+        generating_service(&url, std::time::Duration::from_millis(100), None).await
+    else {
+        return;
+    };
+    let (_, access, _) = credentials(&base, &state, "a@example.com").await;
+    let account = account_id(&state, "a@example.com").await;
+    stock_sofa(&state, "a@example.com", "bare").await;
+    stock_sofa_photographed_at(
+        &state,
+        "a@example.com",
+        "plain",
+        "http://www.ikea.com/sofa.jpg",
+    )
+    .await;
+    stock(
+        &state,
+        &account,
+        "tile",
+        "https://www.praxis.nl/tile/",
+        "finish",
+        json!({"title": "Tile", "image": "https://www.praxis.nl/tile.jpg"}),
+    )
+    .await;
+    assert_eq!(
+        generate("tile", base.clone(), access.clone()).await,
+        refusal("tile is a finish: a 3D model is for a piece of furniture")
+    );
+    assert_eq!(
+        generate("bare", base.clone(), access.clone()).await,
+        refusal(
+            "bare has no photo to make a model from: edit_products action=set fields image (an https link to it) first"
+        )
+    );
+    assert_eq!(
+        generate("plain", base.clone(), access.clone()).await,
+        refusal(
+            "plain has no photo to make a model from: edit_products action=set fields image (an https link to it) first"
+        )
+    );
+    let jobs: i64 = sqlx::query_scalar("select count(*) from product_jobs")
+        .fetch_one(&state.db)
+        .await
+        .unwrap();
+    assert_eq!(jobs, 0);
+}
+
+/// What the editor cannot read, or the plan has no room for, is not kept,
+/// and a photo the generator turns away is not tried again: each job fails
+/// for good, saying why.
+#[tokio::test]
+async fn a_model_that_cannot_be_kept_fails_its_job() {
+    let (stand_in, url) = generator_up(vec![Said::Model(b"solid cube\n".to_vec())]).await;
+    let Some((base, state)) =
+        generating_service(&url, std::time::Duration::from_millis(100), None).await
+    else {
+        return;
+    };
+    let (_, access, _) = credentials(&base, &state, "a@example.com").await;
+    let generate = |id: &'static str| {
+        let (base, access) = (base.clone(), access.clone());
+        async move {
+            tool(
+                &base,
+                &access,
+                "edit_products",
+                json!({"id": id, "action": "generate"}),
+            )
+            .await
+        }
+    };
+    let _worker = newera_cloud::generation::start(state.clone()).expect("a generator");
+    stock_photographed_sofa(&state, "a@example.com", "unreadable").await;
+    let _ = generate("unreadable").await;
+    let failed = job_when(&base, &access, "unreadable", |j| j["status"] == "failed").await;
+    assert_eq!(
+        (&failed["error"], &failed["attempts"]),
+        (
+            &json!(
+                "the generator made no model the editor reads: not a GLB: a binary glTF file starts with `glTF`"
+            ),
+            &json!(0)
+        )
+    );
+
+    stock_sofa_photographed_at(
+        &state,
+        "a@example.com",
+        "turned-away",
+        "https://www.ikea.com/nl/nl/images/products/refused.jpg",
+    )
+    .await;
+    let _ = generate("turned-away").await;
+    let failed = job_when(&base, &access, "turned-away", |j| j["status"] == "failed").await;
+    assert_eq!(
+        (&failed["error"], &failed["attempts"]),
+        (
+            &json!(
+                "the generator refused the photo https://www.ikea.com/nl/nl/images/products/refused.jpg: image_url is an https link to the product's photo"
+            ),
+            &json!(0)
+        )
+    );
+
+    sqlx::query(
+        r#"insert into plans (code, name, limits) values ('tiny', 'Tiny', '{"projects": 3, "storage_mb": 0, "draft_renders_per_day": 0, "hq_renders_per_month": 0}')"#,
+    )
+    .execute(&state.db)
+    .await
+    .unwrap();
+    sqlx::query("update accounts set given_plan = 'tiny' where email = 'a@example.com'")
+        .execute(&state.db)
+        .await
+        .unwrap();
+    stand_in.say(vec![Said::Model(generated_glb())]);
+    stock_photographed_sofa(&state, "a@example.com", "no-room").await;
+    let _ = generate("no-room").await;
+    let failed = job_when(&base, &access, "no-room", |j| j["status"] == "failed").await;
+    assert_eq!(
+        failed["error"],
+        "the model was not kept: the Tiny plan stores 0 MB and this would take 0 MB"
+    );
+    let kept: i64 = sqlx::query_scalar("select count(*) from product_assets")
+        .fetch_one(&state.db)
+        .await
+        .unwrap();
+    assert_eq!(kept, 0);
+    assert_eq!(stand_in.asked().len(), 2, "the turned-away photo is no job");
+}
+
+/// Only a piece with a photo has a job at import: not a finish, though its
+/// page has a picture, and not a piece the shop shows no photo of.
+#[tokio::test]
+async fn only_a_piece_with_a_photo_gets_a_job_at_import() {
+    let fixtures =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../newera-shop/tests/fixtures");
+    let read = |name: &str| -> Value {
+        serde_json::from_str(&std::fs::read_to_string(fixtures.join(name)).unwrap()).unwrap()
+    };
+    let mut unpictured = read("ikea_billy_00263850.json");
+    unpictured["body"][0]["images"] = json!([]);
+    let (anysite, _) = anysite_of(
+        vec![
+            (
+                "ikea/products".to_owned(),
+                "20449908".to_owned(),
+                unpictured,
+            ),
+            (
+                "webparser/parse".to_owned(),
+                "praxis.nl".to_owned(),
+                read("praxis_laminate_10043467.parse.json"),
+            ),
+        ],
+        std::time::Duration::ZERO,
+    )
+    .await;
+    let (_, url) = generator_up(vec![Said::Running]).await;
+    let Some((base, state)) =
+        generating_service(&url, std::time::Duration::from_millis(100), Some(anysite)).await
+    else {
+        return;
+    };
+    let (_, access, _) = credentials(&base, &state, "a@example.com").await;
+    let laminate = fields_of(
+        &tool(
+            &base,
+            &access,
+            "import_product",
+            json!({"url": "https://www.praxis.nl/vloeren/laminaat/10043467"}),
+        )
+        .await,
+    );
+    assert_eq!(laminate["kind"], "finish");
+    assert!(
+        laminate["fields"]["image"]["value"].is_string(),
+        "{laminate}"
+    );
+    assert_eq!(laminate.get("job"), None, "{laminate}");
+    let bare = fields_of(
+        &tool(
+            &base,
+            &access,
+            "import_product",
+            json!({"url": "https://www.ikea.com/nl/nl/p/lack-tafel-wit-20449908/"}),
+        )
+        .await,
+    );
+    assert_eq!(bare["kind"], "furniture");
+    assert_eq!(bare["fields"].get("image"), None, "{bare}");
+    assert_eq!(bare.get("job"), None, "{bare}");
+    let jobs: i64 = sqlx::query_scalar("select count(*) from product_jobs")
+        .fetch_one(&state.db)
+        .await
+        .unwrap();
+    assert_eq!(jobs, 0);
+}
+
+/// A model kept by the job before the service stopped — the generator had
+/// it done, the job not yet marked so — is the job's own: started anew, the
+/// job ends done and the model is drawn where the product is, not failed as
+/// one attached meanwhile.
+#[tokio::test]
+async fn a_job_whose_model_was_kept_before_a_restart_ends_done() {
+    let (_, url) = generator_up(vec![Said::Model(generated_glb())]).await;
+    let Some((base, state)) =
+        generating_service(&url, std::time::Duration::from_millis(100), None).await
+    else {
+        return;
+    };
+    let (_, access, project) = drawn_project(&base, &state, "a@example.com").await;
+    stock_photographed_sofa(&state, "a@example.com", "p1").await;
+    let placed = tool(
+        &base,
+        &access,
+        "place",
+        json!({"items": [{"model": "product:p1", "at": [200, 150]}]}),
+    )
+    .await;
+    assert_eq!(placed["isError"], false, "{placed}");
+    let account = account_id(&state, "a@example.com").await;
+    sqlx::query(
+        "insert into product_jobs (id, account_id, product_id, provider_job, status, created_at, updated_at)
+         values ('j1', $1, 'p1', 'g1', 'running', now() - interval '1 minute', now() - interval '1 minute')",
+    )
+    .bind(&account)
+    .execute(&state.db)
+    .await
+    .unwrap();
+    let kept = newera_cloud::models::keep(
+        &state.db,
+        "p1",
+        generated_glb(),
+        newera_cloud::models::Source::Generated,
+        Some(newera_cloud::generation::GENERATOR),
+    )
+    .await
+    .unwrap();
+    assert!(kept.is_ok());
+    sqlx::query(
+        "update product_assets set job_id = 'j1' where product_id = 'p1' and kind = 'model'",
+    )
+    .execute(&state.db)
+    .await
+    .unwrap();
+    let _worker = newera_cloud::generation::start(state.clone()).expect("a generator");
+    let done = job_when(&base, &access, "p1", |j| j["status"] != "running").await;
+    assert_eq!(
+        done,
+        json!({"id": "j1", "status": "done", "attempts": 0, "updated": done["updated"]})
+    );
+    let (_, bytes) = stored(&state, &project).await;
+    let (_, inside) = newera_core::project_from_bytes(&bytes).unwrap();
+    let file = inside
+        .iter()
+        .find(|(name, _)| name == "products/p1/model.glb")
+        .map(|(_, data)| data.clone());
+    assert_eq!(file, Some(generated_glb()), "drawn where the product is");
+}
+
+/// A job the generator has been running past the bound is given again,
+/// each time a try; with the tries spent it fails saying why.
+#[tokio::test]
+async fn a_running_job_the_generator_sits_on_is_given_again() {
+    let (stand_in, url) = generator_up(vec![Said::Running]).await;
+    let Some((base, state)) = generating_service_stalling(
+        &url,
+        std::time::Duration::from_millis(20),
+        std::time::Duration::from_millis(150),
+        None,
+    )
+    .await
+    else {
+        return;
+    };
+    let (_, access, _) = credentials(&base, &state, "a@example.com").await;
+    stock_photographed_sofa(&state, "a@example.com", "p1").await;
+    let _ = tool(
+        &base,
+        &access,
+        "edit_products",
+        json!({"id": "p1", "action": "generate"}),
+    )
+    .await;
+    let _worker = newera_cloud::generation::start(state.clone()).expect("a generator");
+    let failed = job_when(&base, &access, "p1", |j| j["status"] == "failed").await;
+    assert_eq!(
+        failed,
+        json!({"id": failed["id"], "status": "failed", "attempts": 5,
+               "error": "the generator has been running the job for over 0 minutes without an answer; gave up after 5 tries",
+               "updated": failed["updated"]})
+    );
+    assert_eq!(stand_in.asked().len(), 5);
+}
+
+/// What the generator refuses for good — a photo it cannot have, a size it
+/// does not take — fails at once, saying which.
+#[tokio::test]
+async fn a_refusal_of_the_generator_fails_the_job_at_once() {
+    let (stand_in, url) = generator_up(vec![Said::Refused(
+        "https://www.ikea.com/nl/nl/images/products/sofa.jpg answered 404",
+    )])
+    .await;
+    let Some((base, state)) =
+        generating_service(&url, std::time::Duration::from_millis(50), None).await
+    else {
+        return;
+    };
+    let (_, access, _) = credentials(&base, &state, "a@example.com").await;
+    let account = account_id(&state, "a@example.com").await;
+    stock_photographed_sofa(&state, "a@example.com", "gone").await;
+    stock(
+        &state,
+        &account,
+        "huge",
+        "https://www.ikea.com/nl/nl/p/huge/",
+        "furniture",
+        json!({"title": "Wall", "image": "https://www.ikea.com/nl/nl/images/products/wall.jpg",
+               "width_cm": 2500.0, "depth_cm": 60.0, "height_cm": 250.0}),
+    )
+    .await;
+    let _worker = newera_cloud::generation::start(state.clone()).expect("a generator");
+    for id in ["gone", "huge"] {
+        let _ = tool(
+            &base,
+            &access,
+            "edit_products",
+            json!({"id": id, "action": "generate"}),
+        )
+        .await;
+    }
+    let gone = job_when(&base, &access, "gone", |j| j["status"] == "failed").await;
+    assert_eq!(
+        (&gone["error"], &gone["attempts"]),
+        (
+            &json!(
+                "the generator could not use the photo: https://www.ikea.com/nl/nl/images/products/sofa.jpg answered 404"
+            ),
+            &json!(0)
+        )
+    );
+    let huge = job_when(&base, &access, "huge", |j| j["status"] == "failed").await;
+    assert_eq!(
+        (&huge["error"], &huge["attempts"]),
+        (
+            &json!(
+                "the generator refused the size 2500×60×250 cm: size_cm is three numbers, width, depth and height, each above 0 and up to 2000 cm"
+            ),
+            &json!(0)
+        )
+    );
+    assert_eq!(stand_in.asked().len(), 1, "only the photo's job was taken");
+}
+
+/// No model is made without the shop's width, depth and height: `generate`
+/// says so, an import makes no job, and a job whose product lost a size
+/// fails rather than keep a model at no size.
+#[tokio::test]
+async fn no_model_is_made_without_the_products_size() {
+    let fixtures =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../newera-shop/tests/fixtures");
+    let mut unmeasured: Value = serde_json::from_str(
+        &std::fs::read_to_string(fixtures.join("ikea_billy_00263850.json")).unwrap(),
+    )
+    .unwrap();
+    unmeasured["body"][0]["measurements"] = json!([]);
+    let (anysite, _) = anysite_of(
+        vec![(
+            "ikea/products".to_owned(),
+            "ikea.com".to_owned(),
+            unmeasured,
+        )],
+        std::time::Duration::ZERO,
+    )
+    .await;
+    let (stand_in, url) = generator_up(vec![Said::Model(generated_glb())]).await;
+    let Some((base, state)) =
+        generating_service(&url, std::time::Duration::from_millis(50), Some(anysite)).await
+    else {
+        return;
+    };
+    let (_, access, _) = credentials(&base, &state, "a@example.com").await;
+    let imported = fields_of(
+        &tool(
+            &base,
+            &access,
+            "import_product",
+            json!({"url": "https://www.ikea.com/nl/nl/p/billy-boekenkast-wit-00263850/"}),
+        )
+        .await,
+    );
+    assert!(
+        imported["fields"]["image"]["value"].is_string(),
+        "{imported}"
+    );
+    assert_eq!(imported["fields"].get("depth_cm"), None, "{imported}");
+    assert_eq!(imported.get("job"), None, "{imported}");
+    let id = imported["id"].as_str().unwrap().to_owned();
+    assert_eq!(
+        tool(
+            &base,
+            &access,
+            "edit_products",
+            json!({"id": id, "action": "generate"}),
+        )
+        .await,
+        refusal(&format!(
+            "{id} has no width, depth and height to make its model at: edit_products action=set fields width_cm, depth_cm, height_cm first"
+        ))
+    );
+
+    stock_photographed_sofa(&state, "a@example.com", "p1").await;
+    let _ = tool(
+        &base,
+        &access,
+        "edit_products",
+        json!({"id": "p1", "action": "generate"}),
+    )
+    .await;
+    sqlx::query("update products set fields = fields - 'depth_cm' where id = 'p1'")
+        .execute(&state.db)
+        .await
+        .unwrap();
+    let _worker = newera_cloud::generation::start(state.clone()).expect("a generator");
+    let failed = job_when(&base, &access, "p1", |j| j["status"] == "failed").await;
+    assert_eq!(
+        failed["error"],
+        "the product has no width, depth and height to make its model at: edit_products action=set fields width_cm, depth_cm, height_cm, then action=generate"
+    );
+    assert_eq!(stand_in.asked().len(), 0);
+}
+
+/// The bound counts from when the generator last moved the job on: a job
+/// that waited its turn and then runs is not given again for the wait.
+#[tokio::test]
+async fn a_job_moving_on_is_not_given_again() {
+    let (stand_in, url) = generator_up(vec![Said::Queued]).await;
+    let Some((base, state)) = generating_service_stalling(
+        &url,
+        std::time::Duration::from_millis(20),
+        std::time::Duration::from_millis(600),
+        None,
+    )
+    .await
+    else {
+        return;
+    };
+    let (_, access, _) = credentials(&base, &state, "a@example.com").await;
+    stock_photographed_sofa(&state, "a@example.com", "p1").await;
+    let _ = tool(
+        &base,
+        &access,
+        "edit_products",
+        json!({"id": "p1", "action": "generate"}),
+    )
+    .await;
+    let _worker = newera_cloud::generation::start(state.clone()).expect("a generator");
+    let _ = job_when(&base, &access, "p1", |j| {
+        !stand_in.polled().is_empty() && j["status"] == "queued"
+    })
+    .await;
+    tokio::time::sleep(std::time::Duration::from_millis(450)).await;
+    stand_in.say(vec![Said::Running]);
+    let _ = job_when(&base, &access, "p1", |j| j["status"] == "running").await;
+    tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+    stand_in.say(vec![Said::Model(generated_glb())]);
+    let done = job_when(&base, &access, "p1", |j| j["status"] == "done").await;
+    assert_eq!(done["attempts"], 0, "{done}");
+    assert_eq!(stand_in.asked().len(), 1);
+}
+
+/// A job waiting its turn behind others is not stalled, however long the
+/// wait: it is not given again, which would make the same model twice.
+#[tokio::test]
+async fn a_queued_job_waiting_its_turn_is_not_given_again() {
+    let (stand_in, url) = generator_up(vec![Said::Queued]).await;
+    let Some((base, state)) = generating_service_stalling(
+        &url,
+        std::time::Duration::from_millis(20),
+        std::time::Duration::from_millis(150),
+        None,
+    )
+    .await
+    else {
+        return;
+    };
+    let (_, access, _) = credentials(&base, &state, "a@example.com").await;
+    stock_photographed_sofa(&state, "a@example.com", "p1").await;
+    let _ = tool(
+        &base,
+        &access,
+        "edit_products",
+        json!({"id": "p1", "action": "generate"}),
+    )
+    .await;
+    let _worker = newera_cloud::generation::start(state.clone()).expect("a generator");
+    let _ = job_when(&base, &access, "p1", |_| stand_in.polled().len() > 1).await;
+    tokio::time::sleep(std::time::Duration::from_millis(800)).await;
+    let job = job_of(&base, &access, "p1").await;
+    assert_eq!(
+        job,
+        json!({"id": job["id"], "status": "queued", "attempts": 0, "updated": job["updated"]})
+    );
+    assert_eq!(stand_in.asked().len(), 1, "given once");
+    assert!(stand_in.polled().len() > 10, "{:?}", stand_in.polled());
+}
+
+/// A model attached by hand while one is made stays, even named after this
+/// generator: only the model the job itself kept is the job's own.
+#[tokio::test]
+async fn a_model_attached_under_the_generators_name_stays() {
+    let (stand_in, url) = generator_up(vec![Said::Running]).await;
+    let Some((base, state)) =
+        generating_service(&url, std::time::Duration::from_millis(100), None).await
+    else {
+        return;
+    };
+    let files = model_server().await;
+    state.links.allow_for_tests("127.0.0.1".parse().unwrap());
+    let (_, access, _) = credentials(&base, &state, "a@example.com").await;
+    stock_photographed_sofa(&state, "a@example.com", "p1").await;
+    let _ = tool(
+        &base,
+        &access,
+        "edit_products",
+        json!({"id": "p1", "action": "generate"}),
+    )
+    .await;
+    let _worker = newera_cloud::generation::start(state.clone()).expect("a generator");
+    let _ = job_when(&base, &access, "p1", |j| j["status"] == "running").await;
+    let attached = tool(
+        &base,
+        &access,
+        "edit_products",
+        json!({"id": "p1", "action": "attach_model", "url": format!("{files}/sofa.glb"),
+               "generator": newera_cloud::generation::GENERATOR}),
+    )
+    .await;
+    assert_eq!(attached["isError"], false, "{attached}");
+    let by_hand = kept_model(&state, "p1").await;
+    stand_in.say(vec![Said::Model(generated_glb())]);
+    let failed = job_when(&base, &access, "p1", |j| j["status"] == "failed").await;
+    assert_eq!(
+        failed["error"],
+        "a model was attached while it was being made, and stays: edit_products action=generate makes a new one in its place"
+    );
+    assert_eq!(kept_model(&state, "p1").await, by_hand);
 }

@@ -23,6 +23,7 @@ pub mod config;
 pub mod engine;
 pub mod estimate;
 pub mod files;
+pub mod generation;
 pub mod limits;
 pub mod login;
 pub mod mail;
@@ -55,6 +56,8 @@ pub struct AppState {
     pub flights: products::Flights,
     /// Where a product model's link may lead: the public internet.
     pub links: models::Links,
+    /// Wakes the worker that has furniture models generated.
+    pub jobs: generation::Wake,
 }
 
 impl AppState {
@@ -98,6 +101,7 @@ impl AppState {
             engine,
             flights: products::Flights::default(),
             links: models::Links::default(),
+            jobs: generation::Wake::default(),
         }
     }
 }

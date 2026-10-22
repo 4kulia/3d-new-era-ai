@@ -1,0 +1,4 @@
+numpy==2.1.0
+transformers==4.57.1
+torch==2.10.0a0+a36e1d39eb.nvinternal.main.41386253
+torchvision==0.25.0a0+6b56de1c.nvinternal.main.41386253

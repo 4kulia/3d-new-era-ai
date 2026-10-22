@@ -133,6 +133,80 @@ impl std::fmt::Debug for BuyMeACoffee {
     }
 }
 
+/// The 3D generator a furniture product's model is made by from its photo:
+/// the service in `deploy/spark-generator/`, on a host of the private
+/// network (the tailnet), never the public internet.
+#[derive(Clone)]
+pub struct Generator {
+    /// Where it answers, without a trailing slash, e.g. `http://100.76.21.14:7980`.
+    pub url: String,
+    /// Sent as `X-Generator-Token`.
+    pub token: String,
+    /// How often a job in flight is asked after.
+    pub poll: std::time::Duration,
+    /// The wait before a failed job's first retry; each next one waits twice
+    /// as long.
+    pub backoff: std::time::Duration,
+    /// How long the generator may be running a job without an answer
+    /// before it is given again; a job waiting its turn is never.
+    pub stall: std::time::Duration,
+}
+
+/// How often a job in flight is asked after: a generation takes about two
+/// minutes (`deploy/spark-generator/`), so a model arrives within this of
+/// being made.
+pub const GENERATOR_POLL: std::time::Duration = std::time::Duration::from_secs(10);
+/// How long the generator may be running a job without an answer: it fails
+/// a job itself after 15 minutes (`deploy/spark-generator/server.py`) and
+/// restarts; past this, the job is given again. A chosen bound.
+pub const GENERATOR_STALL: std::time::Duration = std::time::Duration::from_mins(30);
+/// The wait before a failed job's first retry. A chosen bound: with
+/// `generation::ATTEMPTS` it rides out a restart of the generator's host.
+pub const GENERATOR_BACKOFF: std::time::Duration = std::time::Duration::from_secs(60);
+
+impl Generator {
+    /// Reads `NEWERA_GENERATOR_URL` and `NEWERA_GENERATOR_TOKEN`: both, or
+    /// neither (generation off).
+    fn from_env(var: &dyn Fn(&str) -> Option<String>) -> anyhow::Result<Option<Self>> {
+        match (var("NEWERA_GENERATOR_URL"), var("NEWERA_GENERATOR_TOKEN")) {
+            (None, None) => {
+                tracing::warn!("no NEWERA_GENERATOR_URL: furniture models are not generated");
+                Ok(None)
+            }
+            (Some(url), Some(token)) => {
+                let url = url.trim().trim_end_matches('/').to_owned();
+                let token = token.trim().to_owned();
+                anyhow::ensure!(!token.is_empty(), "NEWERA_GENERATOR_TOKEN is empty");
+                anyhow::ensure!(
+                    url.starts_with("http://") || url.starts_with("https://"),
+                    "NEWERA_GENERATOR_URL is an http(s) address"
+                );
+                Ok(Some(Self {
+                    url,
+                    token,
+                    poll: GENERATOR_POLL,
+                    backoff: GENERATOR_BACKOFF,
+                    stall: GENERATOR_STALL,
+                }))
+            }
+            (Some(_), None) => anyhow::bail!("missing NEWERA_GENERATOR_TOKEN"),
+            (None, Some(_)) => anyhow::bail!("missing NEWERA_GENERATOR_URL"),
+        }
+    }
+}
+
+impl std::fmt::Debug for Generator {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Generator")
+            .field("url", &self.url)
+            .field("token", &"<hidden>")
+            .field("poll", &self.poll)
+            .field("backoff", &self.backoff)
+            .field("stall", &self.stall)
+            .finish()
+    }
+}
+
 /// Who may hold an account here, from `NEWERA_ALLOWED_EMAILS`: anyone, or
 /// only the addresses listed — an installation that is someone's own. The
 /// listed addresses are its owners, on the `owner` plan.
@@ -217,6 +291,9 @@ pub struct Config {
     /// `ANYSITE_BASE_URL`, the CLI's name, for a stand-in); `None` leaves
     /// product import off and everything else working.
     pub anysite: Option<newera_shop::AnySite>,
+    /// The 3D generator; `None` leaves imported furniture on its placeholder
+    /// until a model is attached.
+    pub generator: Option<Generator>,
 }
 
 impl std::fmt::Debug for Config {
@@ -232,6 +309,7 @@ impl std::fmt::Debug for Config {
             .field("allowed_emails", &self.allowed_emails)
             .field("port", &self.port)
             .field("anysite", &self.anysite)
+            .field("generator", &self.generator)
             .finish()
     }
 }
@@ -290,6 +368,7 @@ impl Config {
         if anysite.is_none() {
             tracing::warn!("no ANYSITE_API_KEY: product import is off");
         }
+        let generator = Generator::from_env(&var)?;
         let port = var("PORT")
             .map(|p| p.parse().context("PORT"))
             .transpose()?
@@ -305,6 +384,7 @@ impl Config {
             allowed_emails,
             port,
             anysite,
+            generator,
         })
     }
 
@@ -361,6 +441,55 @@ mod tests {
                 .unwrap()
                 .lists("a@b.co")
         );
+    }
+
+    #[test]
+    fn the_generator_takes_its_address_and_token_together() {
+        let env = |given: &'static [(&'static str, &'static str)]| {
+            move |name: &str| {
+                given
+                    .iter()
+                    .find(|(n, _)| *n == name)
+                    .map(|(_, v)| (*v).to_owned())
+            }
+        };
+        assert!(Generator::from_env(&env(&[])).unwrap().is_none());
+        let both = Generator::from_env(&env(&[
+            ("NEWERA_GENERATOR_URL", " http://100.76.21.14:7980/ "),
+            ("NEWERA_GENERATOR_TOKEN", " t0k "),
+        ]))
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            (
+                both.url.as_str(),
+                both.token.as_str(),
+                both.poll,
+                both.backoff
+            ),
+            (
+                "http://100.76.21.14:7980",
+                "t0k",
+                GENERATOR_POLL,
+                GENERATOR_BACKOFF
+            )
+        );
+        assert!(!format!("{both:?}").contains("t0k"), "the token is hidden");
+        assert_eq!(both.stall, GENERATOR_STALL);
+        for half in [
+            &[("NEWERA_GENERATOR_URL", "http://h:1")][..],
+            &[("NEWERA_GENERATOR_TOKEN", "t")][..],
+            &[
+                ("NEWERA_GENERATOR_URL", "h:1"),
+                ("NEWERA_GENERATOR_TOKEN", "t"),
+            ][..],
+            &[
+                ("NEWERA_GENERATOR_URL", "http://h:1"),
+                ("NEWERA_GENERATOR_TOKEN", "  "),
+            ][..],
+        ] {
+            assert!(Generator::from_env(&env(half)).is_err(), "{half:?}");
+        }
     }
 
     #[test]
