@@ -122,7 +122,7 @@ pub fn photo_scene(
 pub fn render_photo_since(
     document: SharedDocument,
     args: serde_json::Value,
-    started: std::time::Instant,
+    started: web_time::Instant,
 ) -> Result<rmcp::model::CallToolResult, String> {
     let (server, p) = photo_call(document, args)?;
     let mut result = server

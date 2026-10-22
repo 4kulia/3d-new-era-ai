@@ -134,7 +134,7 @@ pub(crate) struct Render3dParams {
 /// cancellation on.
 struct Deadline {
     inner: Option<Arc<dyn newera_core::progress::Watcher>>,
-    until: std::time::Instant,
+    until: web_time::Instant,
     /// What stopped the render first: [`RUNNING`], [`LATE`] or [`STOPPED`].
     stop: std::sync::atomic::AtomicU8,
 }
@@ -148,7 +148,7 @@ const STOPPED: u8 = 2;
 impl Deadline {
     fn new(
         inner: Option<Arc<dyn newera_core::progress::Watcher>>,
-        until: std::time::Instant,
+        until: web_time::Instant,
     ) -> Self {
         Self {
             inner,
@@ -162,7 +162,7 @@ impl Deadline {
         use std::sync::atomic::Ordering;
         let now = if self.inner.as_ref().is_some_and(|w| w.cancelled()) {
             STOPPED
-        } else if std::time::Instant::now() >= self.until {
+        } else if web_time::Instant::now() >= self.until {
             LATE
         } else {
             RUNNING
@@ -527,7 +527,7 @@ impl NewEraMcp {
         &self,
         Parameters(p): Parameters<PhotoParams>,
     ) -> Result<CallToolResult, ErrorData> {
-        self.render_photo_since(&p, std::time::Instant::now())
+        self.render_photo_since(&p, web_time::Instant::now())
     }
 
     /// [`Self::render_photo`] for a call that started at `started`: its
@@ -535,7 +535,7 @@ impl NewEraMcp {
     pub(crate) fn render_photo_since(
         &self,
         p: &PhotoParams,
-        started: std::time::Instant,
+        started: web_time::Instant,
     ) -> Result<CallToolResult, ErrorData> {
         if p.cancel {
             #[cfg(not(target_arch = "wasm32"))]
@@ -590,7 +590,7 @@ impl NewEraMcp {
             Some((seconds, started.checked_add(span)?))
         });
         if let Some((seconds, until)) = until
-            && std::time::Instant::now() >= until
+            && web_time::Instant::now() >= until
         {
             return Err(invalid(photo_late(seconds)));
         }
@@ -803,10 +803,10 @@ mod tests {
                 true
             }
         }
-        let later = std::time::Instant::now() + std::time::Duration::from_secs(3600);
+        let later = web_time::Instant::now() + std::time::Duration::from_secs(3600);
         let outside = Deadline::new(Some(Arc::new(Cancelled)), later);
         assert_eq!(outside.stopped(), STOPPED);
-        let late = Deadline::new(None, std::time::Instant::now());
+        let late = Deadline::new(None, web_time::Instant::now());
         assert_eq!(late.stopped(), LATE);
         // Decided at the first look that saw it, not later.
         let running = Deadline::new(None, later);
