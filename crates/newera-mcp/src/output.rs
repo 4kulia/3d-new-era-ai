@@ -60,6 +60,29 @@ pub fn structure(result: &mut rmcp::model::CallToolResult) {
     result.structured_content = from_content(&content);
 }
 
+/// Tells the agent something about an answer it got (JSON), beside it: a
+/// last text item in `content`, and `note` in `structuredContent` when that
+/// is an object — the shape of the answer stays what it was. A note joins
+/// the one already there on a line of its own, in the fields as in the text.
+/// An answer with no `content` array is left alone. The one way a note is
+/// added: by the hosted service and by the browser tab alike.
+pub fn add_note(answer: &mut Value, note: &str) {
+    let Some(content) = answer.get_mut("content").and_then(Value::as_array_mut) else {
+        return;
+    };
+    content.push(json!({"type": "text", "text": note}));
+    if let Some(fields) = answer
+        .get_mut("structuredContent")
+        .and_then(Value::as_object_mut)
+    {
+        let joined = match fields.get("note").and_then(Value::as_str) {
+            Some(before) => format!("{before}\n{note}"),
+            None => note.to_owned(),
+        };
+        fields.insert("note".to_owned(), json!(joined));
+    }
+}
+
 /// The same, for an answer already turned into JSON (the hosted service,
 /// and a browser tab behind the relay, hand them around that way).
 pub fn structure_json(result: &mut Value) {
@@ -887,6 +910,12 @@ pub(crate) fn schema(name: &str) -> Option<Value> {
                 ("memory_mb", num("estimate: memory it needs, estimated")),
                 ("measured", text("estimate: what is and is not measured")),
                 ("text", text("cancel: what was stopped")),
+                (
+                    "note",
+                    text(
+                        "A dark photo: how dark, and what would brighten it; hosted: which renderer made it",
+                    ),
+                ),
             ],
             &[],
         ),
@@ -1269,6 +1298,29 @@ fn undescribe(value: &mut Value) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every note reaches the fields as it reaches the text: a second one
+    /// does not put out the first.
+    #[test]
+    fn notes_are_kept_side_by_side() {
+        let mut answer = json!({
+            "content": [{"type": "text", "text": "ok rev=2"}],
+            "structuredContent": {"ok": true},
+        });
+        add_note(&mut answer, "one");
+        add_note(&mut answer, "two");
+        assert_eq!(
+            answer,
+            json!({
+                "content": [
+                    {"type": "text", "text": "ok rev=2"},
+                    {"type": "text", "text": "one"},
+                    {"type": "text", "text": "two"},
+                ],
+                "structuredContent": {"ok": true, "note": "one\ntwo"},
+            })
+        );
+    }
 
     /// Checks `value` against the parts of JSON Schema these schemas use:
     /// `type` (one or several), `properties`, `required` and `items`.

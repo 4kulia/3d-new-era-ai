@@ -3040,8 +3040,8 @@ async fn the_agent_fills_what_the_shop_did_not_show() {
     );
     assert_eq!(
         set["missing"],
-        json!(["pack_m2"]),
-        "a covering needs its m² per pack"
+        json!(["pack_m2", "tile_width_cm", "tile_length_cm"]),
+        "a covering needs its m² per pack, and the tile's size its look is drawn at"
     );
     assert_eq!(
         set["fields"]["price"],
@@ -3052,7 +3052,7 @@ async fn the_agent_fills_what_the_shop_did_not_show() {
             &base,
             &access,
             "edit_products",
-            json!({"id": id, "action": "set", "fields": {"pack_m2": 1.44}}),
+            json!({"id": id, "action": "set", "fields": {"pack_m2": 1.44, "tile_width_cm": 30, "tile_length_cm": 60}}),
         )
         .await,
     );
@@ -3642,13 +3642,18 @@ async fn a_render_runs_on_the_server_while_a_tab_holds_the_room() {
         .await;
         let answer = rendering.await.unwrap();
         png(&answer);
+        // No word of the tab: only a photo's own, of the unlit room.
+        let own = (name == "render_photo").then_some(DARK_ROOM);
         assert_eq!(
-            answer["content"].as_array().unwrap().len(),
-            1,
+            answer["content"].as_array().unwrap()[1..],
+            own.map(|n| json!({"type": "text", "text": n}))
+                .into_iter()
+                .collect::<Vec<_>>(),
             "{name}: {answer}"
         );
-        assert!(
-            answer["structuredContent"].get("note").is_none(),
+        assert_eq!(
+            answer["structuredContent"].get("note"),
+            own.map(|n| json!(n)).as_ref(),
             "{name}: {answer}"
         );
         tab_left_alone(&mut socket).await;
@@ -4610,7 +4615,7 @@ fn bathroom_lines() -> [Value; 5] {
         json!({
             "kind": "covering", "product": "p-laminate", "shop": "praxis.nl",
             "title": "Laminaat Eiken", "url": "https://www.praxis.nl/laminaat",
-            "quantity": "6", "unit": "pack", "need": ["12.6", "m2"],
+            "quantity": "6", "unit": "pack", "packs": "6", "need": ["12.6", "m2"],
             "unit_price": null, "currency": "EUR", "total": null,
             "rooms": ["r2"], "surfaces": ["r2:floor"],
             "notes": ["no price: edit_products sets it"],
@@ -4626,7 +4631,7 @@ fn bathroom_lines() -> [Value; 5] {
         json!({
             "kind": "paint", "product": "p-paint", "shop": "gamma.nl",
             "title": "Muurverf Wit 2,5 L", "url": "https://www.gamma.nl/verf",
-            "quantity": "1", "unit": "pack", "need": ["2.4", "litre"],
+            "quantity": "1", "unit": "pack", "packs": "1", "need": ["2.4", "litre"],
             "unit_price": "39.99", "currency": "EUR", "vat_included": true, "total": "39.99",
             "rooms": ["r2"], "surfaces": ["r2:ceiling"],
         }),
@@ -4634,14 +4639,14 @@ fn bathroom_lines() -> [Value; 5] {
         json!({
             "kind": "covering", "product": "p-tile", "shop": "praxis.nl",
             "title": "Wandtegel Wit 30x60", "url": "https://www.praxis.nl/tegel",
-            "quantity": "4", "unit": "pack", "need": ["5.28", "m2"],
+            "quantity": "4", "unit": "pack", "packs": "4", "need": ["5.28", "m2"],
             "unit_price": "24.54", "currency": "EUR", "vat_included": true, "total": "98.16",
             "rooms": ["r2"], "surfaces": ["w1:right"],
         }),
         json!({
             "kind": "furniture", "product": "p-chairs", "shop": "ikea.com",
             "title": "TEODORES stoel, 4 st", "url": "https://www.ikea.com/nl/nl/p/stoel",
-            "quantity": "2", "unit": "pack", "need": ["5", "piece"],
+            "quantity": "2", "unit": "pack", "packs": "2", "need": ["5", "piece"],
             "unit_price": "79.96", "currency": "EUR", "vat_included": true, "total": "159.92",
             "rooms": ["r2"], "pieces": ["f10", "f11", "f12", "f13", "f14"],
             "notes": ["sold in packs of 4 pieces"],
@@ -4903,11 +4908,11 @@ async fn extra_lines_and_saved_estimates_stay_with_their_project() {
     assert_eq!(
         got.text().await.unwrap(),
         "group,kind,shop,title,url,quantity,unit,packs,unit_price,currency,vat,total,rooms,surfaces,notes\r\n\
-         praxis.nl,covering,praxis.nl,Laminaat Eiken,https://www.praxis.nl/laminaat,6,pack,,,EUR,unknown,unpriced,r2,r2:floor,no price: edit_products sets it\r\n\
-         praxis.nl,covering,praxis.nl,Wandtegel Wit 30x60,https://www.praxis.nl/tegel,4,pack,,24.54,EUR,included,98.16,r2,w1:right,\r\n\
+         praxis.nl,covering,praxis.nl,Laminaat Eiken,https://www.praxis.nl/laminaat,6,pack,6,,EUR,unknown,unpriced,r2,r2:floor,no price: edit_products sets it\r\n\
+         praxis.nl,covering,praxis.nl,Wandtegel Wit 30x60,https://www.praxis.nl/tegel,4,pack,4,24.54,EUR,included,98.16,r2,w1:right,\r\n\
          no shop,unknown,,p-other,,10,m2,,,,unknown,unpriced,,w1:left,product p-other is not in this account's library (products lists it)\r\n\
-         gamma.nl,paint,gamma.nl,\"Muurverf Wit 2,5 L\",https://www.gamma.nl/verf,1,pack,,39.99,EUR,included,39.99,r2,r2:ceiling,\r\n\
-         ikea.com,furniture,ikea.com,\"TEODORES stoel, 4 st\",https://www.ikea.com/nl/nl/p/stoel,2,pack,,79.96,EUR,included,159.92,r2,,sold in packs of 4 pieces\r\n\
+         gamma.nl,paint,gamma.nl,\"Muurverf Wit 2,5 L\",https://www.gamma.nl/verf,1,pack,1,39.99,EUR,included,39.99,r2,r2:ceiling,\r\n\
+         ikea.com,furniture,ikea.com,\"TEODORES stoel, 4 st\",https://www.ikea.com/nl/nl/p/stoel,2,pack,2,79.96,EUR,included,159.92,r2,,sold in packs of 4 pieces\r\n\
          Tegelzetter Jan,extra,Tegelzetter Jan,Tiling labour,,6,hour,,45.00,EUR,excluded,270.00,,,\r\n\
          total,,,,,,,,,,,unpriced,,,\r\n\
          total,,,,,,,,,EUR,excluded,270.00 (incomplete),,,\r\n\
@@ -5066,7 +5071,7 @@ async fn with_a_tab_open_the_estimate_is_of_what_it_shows() {
     let tile = json!({
         "kind": "covering", "product": "p-tile", "shop": "praxis.nl",
         "title": "Wandtegel Wit 30x60", "url": "https://www.praxis.nl/tegel",
-        "quantity": "2", "unit": "pack", "need": ["3.24", "m2"],
+        "quantity": "2", "unit": "pack", "packs": "2", "need": ["3.24", "m2"],
         "unit_price": "24.54", "currency": "EUR", "vat_included": true, "total": "49.08",
         "rooms": ["r8"], "surfaces": ["w7:left"],
     });
@@ -5328,6 +5333,94 @@ async fn a_model_is_attached_from_a_link_only_when_it_is_one() {
     assert_eq!(again["files"][0][2], Value::Null);
 }
 
+/// Products placed as placeholders in one call are named in one note, each
+/// with how its model comes: the one whose model is being made says its job
+/// and how it stands, the others what makes one — after a failed making
+/// with why it failed, without a photo with what generate needs — in the
+/// text and in the fields alike.
+#[tokio::test]
+async fn every_placeholder_of_a_call_is_named_with_how_its_model_comes() {
+    let (_, url) = generator_up(Vec::new()).await;
+    let Some((base, state)) =
+        generating_service(&url, std::time::Duration::from_secs(60), None).await
+    else {
+        return;
+    };
+    let (_, access, _) = drawn_project(&base, &state, "a@example.com").await;
+    let account = account_id(&state, "a@example.com").await;
+    stock(
+        &state,
+        &account,
+        "billy",
+        "https://www.ikea.com/nl/nl/p/billy-00263850/",
+        "furniture",
+        json!({"title": "BILLY Boekenkast", "product_type": "Boekenkast", "colour_hex": "#ffffff",
+               "image": "https://www.ikea.com/nl/nl/images/products/billy.jpg",
+               "width_cm": 80.0, "depth_cm": 28.0, "height_cm": 202.0}),
+    )
+    .await;
+    stock_photographed_sofa(&state, "a@example.com", "sofa").await;
+    stock_photographed_sofa(&state, "a@example.com", "failed").await;
+    stock_photographed_sofa(&state, "a@example.com", "waiting").await;
+    stock_sofa(&state, "a@example.com", "bare").await;
+    // BILLY's model is being made, and the worker leaves it be until
+    // tomorrow; the making of another's failed for good.
+    sqlx::query(
+        "insert into product_jobs (id, account_id, product_id, provider_job, status, error, next_at)
+         values ('j1', $1, 'billy', 'g1', 'running', null, now() + interval '1 day'),
+                ('j2', $1, 'failed', 'g2', 'failed', 'the generator answered 500', now()),
+                ('j3', $1, 'waiting', null, 'queued', null, now() + interval '1 day')",
+    )
+    .bind(&account)
+    .execute(&state.db)
+    .await
+    .unwrap();
+    let placed = tool(
+        &base,
+        &access,
+        "place",
+        json!({"items": [{"model": "product:billy", "at": [100, 100]}, {"model": "product:sofa", "at": [250, 150]},
+                         {"model": "product:failed", "at": [250, 250]}, {"model": "product:waiting", "at": [400, 250]},
+                         {"model": "product:bare", "at": [250, 350]}]}),
+    )
+    .await;
+    assert_eq!(placed["isError"], false, "{placed}");
+    let note = "No 3D model yet, so drawn as a placeholder — a generated approximation stretched to the piece's box: \
+        BILLY Boekenkast (billy, drawn as bookcase): its model is being made (job j1, running) and replaces the placeholder when done; products id=billy shows the job; \
+        Sofa (sofa, drawn as sofa-3): edit_products id=sofa action=generate makes one from its photo, or action=attach_model gives it one; \
+        Sofa (failed, drawn as sofa-3): its model could not be made (the generator answered 500): edit_products id=failed action=generate makes one from its photo, or action=attach_model gives it one; \
+        Sofa (waiting, drawn as sofa-3): its model is being made (job j3, queued) and replaces the placeholder when done; products id=waiting shows the job; \
+        Sofa (bare, drawn as sofa-3): edit_products id=bare action=attach_model gives it a model (action=generate needs its photo: action=set fields image). \
+        A model replaces the placeholder at once in the project open now (the editor tab, or the server's copy) and in any other project the next time that project is opened";
+    let content = placed["content"].as_array().unwrap();
+    assert_eq!(content.len(), 2, "{placed}");
+    assert_eq!(content[1], json!({"type": "text", "text": note}));
+    assert_eq!(placed["structuredContent"]["note"], note);
+}
+
+/// Without a generator on this server, a placeholder with a photo is told
+/// only what attaches a model: there is nothing to make one.
+#[tokio::test]
+async fn without_a_generator_a_placeholder_is_told_to_attach_a_model() {
+    let Some((base, state)) = service().await else {
+        return;
+    };
+    let (_, access, _) = drawn_project(&base, &state, "a@example.com").await;
+    stock_photographed_sofa(&state, "a@example.com", "sofa").await;
+    let placed = tool(
+        &base,
+        &access,
+        "place",
+        json!({"items": [{"model": "product:sofa", "at": [250, 150]}]}),
+    )
+    .await;
+    assert_eq!(placed["isError"], false, "{placed}");
+    assert_eq!(
+        placed["structuredContent"]["note"],
+        "No 3D model yet, so drawn as a placeholder — a generated approximation stretched to the piece's box: Sofa (sofa, drawn as sofa-3): edit_products id=sofa action=attach_model gives it a model. A model replaces the placeholder at once in the project open now (the editor tab, or the server's copy) and in any other project the next time that project is opened"
+    );
+}
+
 /// A product placed with no tab open is drawn with its model, at the
 /// shop's size, and carries its id; the model is saved inside the project,
 /// so a copy opened afresh from the database draws it too.
@@ -5401,7 +5494,7 @@ async fn a_product_without_a_model_is_placed_as_a_placeholder() {
     )
     .await;
     assert_eq!(placed["isError"], false, "{placed}");
-    let note = "p1 has no 3D model yet: it is drawn as a placeholder (sofa-3), a generated approximation stretched to the piece's box. edit_products action=attach_model gives it a model, which replaces the placeholder at once in the project open now (the editor tab, or the server's copy) and in any other project the next time that project is opened";
+    let note = "No 3D model yet, so drawn as a placeholder — a generated approximation stretched to the piece's box: Sofa (p1, drawn as sofa-3): edit_products id=p1 action=attach_model gives it a model. A model replaces the placeholder at once in the project open now (the editor tab, or the server's copy) and in any other project the next time that project is opened";
     let content = placed["content"].as_array().unwrap();
     assert_eq!(
         content.last().unwrap(),
@@ -5627,7 +5720,7 @@ async fn a_product_placed_in_the_tab_arrives_before_the_call() {
     assert_eq!(placed["content"][0]["text"], "ok ids=f1");
     assert_eq!(
         placed["content"][1]["text"],
-        "p1 has no 3D model yet: it is drawn as a placeholder (sofa-3), a generated approximation stretched to the piece's box. edit_products action=attach_model gives it a model, which replaces the placeholder at once in the project open now (the editor tab, or the server's copy) and in any other project the next time that project is opened"
+        "No 3D model yet, so drawn as a placeholder — a generated approximation stretched to the piece's box: Sofa (p1, drawn as sofa-3): edit_products id=p1 action=attach_model gives it a model. A model replaces the placeholder at once in the project open now (the editor tab, or the server's copy) and in any other project the next time that project is opened"
     );
     tab_left_alone(&mut socket).await;
 
@@ -7529,6 +7622,43 @@ async fn draft_renders(state: &AppState) -> i32 {
         .unwrap()
 }
 
+/// A black photo from the GPU renderer comes with the note the built-in
+/// renderer gives its own: how dark it is, and what would brighten it.
+#[tokio::test]
+async fn a_dark_photo_from_the_gpu_renderer_says_no_light_reaches_it() {
+    let black = {
+        let image = image::DynamicImage::ImageRgba8(image::RgbaImage::from_pixel(
+            4,
+            3,
+            image::Rgba([3, 3, 3, 255]),
+        ));
+        let mut png = Vec::new();
+        image
+            .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+            .unwrap();
+        png
+    };
+    let (_, url) = renderer_up(vec![Drawn::Photo(black.clone())]).await;
+    let Some((base, state)) = rendering_service(&url, std::time::Duration::from_secs(20)).await
+    else {
+        return;
+    };
+    let (_, access, _) = drawn_project(&base, &state, "ana@example.com").await;
+    let photo = tool(&base, &access, "render_photo", json!({"w": 320, "h": 200})).await;
+    let note = "The photo is dark (mean brightness 3 of 255). More light would brighten it: a lamp (place a light), daylight through a window (hour= by day), or lighter finishes";
+    assert_eq!(
+        photo,
+        json!({
+            "content": [
+                {"type": "image", "data": base64::engine::general_purpose::STANDARD.encode(&black), "mimeType": "image/png"},
+                {"type": "text", "text": note},
+            ],
+            "isError": false,
+            "structuredContent": {"mimeType": "image/png", "note": note},
+        })
+    );
+}
+
 /// With a renderer up, `render_photo` sends it the scene the built-in
 /// renderer would draw and answers its PNG, as it answers its own; a call
 /// the tool refuses never reaches it.
@@ -7608,36 +7738,39 @@ async fn a_photo_is_made_by_the_gpu_renderer() {
     assert_eq!(stand_in.asked().len(), 1, "an estimate is answered here");
 }
 
+/// What a photo of `drawn_project`'s room says: a closed room with no lamp
+/// at the project's own hour comes out dark.
+const DARK_ROOM: &str = "The photo is dark (mean brightness 2 of 255). More light would brighten it: a lamp (place a light), daylight through a window (hour= by day), or lighter finishes";
+
 /// The note a fallback photo carries, for the reason `why`.
 fn fallback_note(why: &str) -> String {
     format!("The GPU renderer did not make this photo ({why}): it is from the built-in renderer.")
 }
 
 /// What a fallback photo looks like: the built-in renderer's, at the size
-/// asked, with the note saying why.
+/// asked, dark as `drawn_project`'s room is, with the note saying why after
+/// the built-in renderer's own.
 fn assert_fallback(photo: &Value, why: &str) {
     assert_eq!(photo["isError"], false, "{photo}");
     assert_eq!(photo_size(photo), (96, 64), "{photo}");
     let note = fallback_note(why);
     assert_eq!(
-        photo["content"][1],
-        json!({"type": "text", "text": note}),
-        "{photo}"
-    );
-    assert_eq!(
-        photo["content"].as_array().map(Vec::len),
-        Some(2),
+        photo["content"].as_array().unwrap()[1..],
+        [
+            json!({"type": "text", "text": DARK_ROOM}),
+            json!({"type": "text", "text": note})
+        ],
         "{photo}"
     );
     assert_eq!(
         photo["structuredContent"],
-        json!({"mimeType": "image/png", "note": note})
+        json!({"mimeType": "image/png", "note": format!("{DARK_ROOM}\n{note}")})
     );
 }
 
 /// The reason a fallback note gives.
 fn fallback_why(photo: &Value) -> String {
-    photo["content"][1]["text"]
+    photo["content"][2]["text"]
         .as_str()
         .and_then(|n| n.strip_prefix("The GPU renderer did not make this photo ("))
         .and_then(|n| n.strip_suffix("): it is from the built-in renderer."))
@@ -7786,11 +7919,77 @@ async fn swatch_server() -> String {
         .route(
             "/page.png",
             axum::routing::get(|| async { "<html>no picture</html>" }),
-        );
+        )
+        .route("/cdn/origin.webp", axum::routing::get(cdn_swatch));
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base = format!("http://{}", listener.local_addr().unwrap());
     tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
     base
+}
+
+/// Praxis's CDN as measured from a Mac (2026-10-22): its swatch, recorded
+/// (`tests/fixtures/praxis_swatch_5687264.webp`, a lossy 424×424 WebP), to
+/// the full Chrome `User-Agent` strings it answered, and `CloudFront`'s 403
+/// page to anything else — as it answered `3d-new-era-ai/…`, a bare
+/// `Mozilla/5.0` and `Mozilla/5.0 (X11; Linux x86_64)`.
+async fn cdn_swatch(headers: axum::http::HeaderMap) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    const ADMITTED: [&str; 2] = [
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36",
+        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36",
+    ];
+    let browser = headers
+        .get(axum::http::header::USER_AGENT)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|ua| ADMITTED.contains(&ua));
+    if !browser {
+        return (
+            axum::http::StatusCode::FORBIDDEN,
+            [(axum::http::header::CONTENT_TYPE, "text/html")],
+            "<HTML><HEAD><TITLE>ERROR: The request could not be satisfied</TITLE></HEAD><BODY><H1>403 ERROR</H1></BODY></HTML>",
+        )
+            .into_response();
+    }
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/praxis_swatch_5687264.webp");
+    (
+        [(axum::http::header::CONTENT_TYPE, "image/webp")],
+        std::fs::read(path).unwrap(),
+    )
+        .into_response()
+}
+
+/// A shop's CDN that turns away all but browsers gives the swatch all the
+/// same, and its lossy WebP is drawn: the server asks as a browser does.
+#[tokio::test]
+async fn a_swatch_behind_a_cdn_that_admits_only_browsers_is_drawn() {
+    let Some((base, state)) = service().await else {
+        return;
+    };
+    let pictures = swatch_server().await;
+    state.links.allow_for_tests("127.0.0.1".parse().unwrap());
+    let (_, access, _) = drawn_project(&base, &state, "a@example.com").await;
+    let swatch = format!("{pictures}/cdn/origin.webp");
+    stock_finishes(&state, "a@example.com", &swatch).await;
+    let assigned = tool(
+        &base,
+        &access,
+        "edit_finishes",
+        json!({"action": "assign", "surface": "w1:left", "product": "product:tile"}),
+    )
+    .await;
+    assert_eq!(assigned["isError"], false, "{assigned}");
+    assert_eq!(
+        assigned["content"].as_array().unwrap().len(),
+        1,
+        "nothing to tell: {assigned}"
+    );
+    let (texture, basis) = kept_texture(&state, "tile").await;
+    assert_eq!(basis, swatch);
+    assert_eq!(
+        newera_cloud::textures::dimensions(&texture),
+        Some([424, 424])
+    );
 }
 
 /// A 30×60 cm tile whose swatch is `swatch`, and a paint in #f2efe6, in

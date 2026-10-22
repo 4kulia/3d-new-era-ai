@@ -12,7 +12,11 @@ DEADLINE_S = 60.0
 CONNECT_S = 10.0
 READ_S = 30.0
 CONTEXT = ssl.create_default_context()
-AGENT = "ia3d-generator/1"
+# A browser's User-Agent, the same one the cloud fetches with (BROWSER_AGENT in
+# crates/newera-cloud/src/models.rs): shops' CDNs turn other clients away. Praxis's
+# CloudFront answered 403 to "ia3d-generator/1", a bare "Mozilla/5.0" and
+# "Mozilla/5.0 (X11; Linux x86_64)", and 200 to this (measured 2026-10-22).
+AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36"
 REDIRECTS = {301, 302, 303, 307, 308}
 NAT64 = ipaddress.IPv6Network("64:ff9b::/96")
 SIXTOFOUR = ipaddress.IPv6Network("2002::/16")

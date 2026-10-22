@@ -75,6 +75,12 @@ fn a_price_without_btw_is_not_marked_with_it() {
         let vat = &fields["vat_included"];
         (vat.value.clone(), vat.evidence, vat.from.clone())
     };
+    let said = |lines: &str| {
+        let page = json!({
+            "cleaned_html": format!("<h1>Kast Alaska</h1><div>135,20</div>{lines}")
+        });
+        from_page(&page, None).1.contains_key("vat_included")
+    };
     for line in [
         "excl. btw",
         "Prijs excl. BTW",
@@ -92,13 +98,9 @@ fn a_price_without_btw_is_not_marked_with_it() {
         read("<div>incl. btw</div>"),
         (json!(true), Evidence::Text, "incl. btw".to_owned())
     );
-    assert_eq!(
-        read(""),
-        (
-            json!(true),
-            Evidence::Market,
-            "Dutch consumer prices include VAT".to_owned()
-        )
+    assert!(
+        !said(""),
+        "a page silent on VAT says nothing of it: the market's rule is the import's"
     );
     assert_eq!(
         read("<div>excl. btw</div><div>incl. btw</div>").0,

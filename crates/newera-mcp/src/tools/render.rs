@@ -521,7 +521,7 @@ impl NewEraMcp {
         )]))
     }
     #[tool(
-        description = "Realistic photo (path traced: sun from compass location and time, lamps, glass). cam=i stored view, or view=visitor/aerial (yaw,pitch). quality draft (~10 s) | good | best; hour = local solar time (e.g. 9, 15.5, 20); w/h small. Returns PNG. One runs at a time, on at most half the cores (4): threads lowers that, max_s stops it past a deadline, estimate=true answers the budget and the work (pixels, rays, triangles, memory) without rendering, cancel=true stops the one running (sessions shows it)."
+        description = "Realistic photo (path traced: sun from compass location and time, lamps, glass). cam=i stored view, or view=visitor/aerial (yaw,pitch). quality draft (~10 s) | good | best; hour = local solar time (e.g. 9, 15.5, 20); w/h small. Returns PNG, and a note when it comes out dark. One runs at a time, on at most half the cores (4): threads lowers that, max_s stops it past a deadline, estimate=true answers the budget and the work (pixels, rays, triangles, memory) without rendering, cancel=true stops the one running (sessions shows it)."
     )]
     pub(crate) fn render_photo(
         &self,
@@ -611,15 +611,21 @@ impl NewEraMcp {
                 }
             }
         };
+        let dark = dark_note(&image);
         let mut png = Vec::new();
         image::DynamicImage::ImageRgba8(image)
             .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
             .map_err(|e| invalid(e.to_string()))?;
         let data = base64::engine::general_purpose::STANDARD.encode(png);
-        Ok(CallToolResult::success(vec![ContentBlock::image(
-            data,
-            "image/png",
-        )]))
+        let mut content = vec![ContentBlock::image(data, "image/png")];
+        let Some(note) = dark else {
+            return Ok(CallToolResult::success(content));
+        };
+        content.push(ContentBlock::text(note.clone()));
+        let mut result = CallToolResult::success(content);
+        result.structured_content =
+            Some(serde_json::json!({"mimeType": "image/png", "note": note}));
+        Ok(result)
     }
     /// What [`Self::render_photo`] would render, for a renderer outside
     /// this process; `None` when the call renders nothing (`estimate`,
@@ -700,6 +706,37 @@ impl NewEraMcp {
             .map_err(|e| invalid(format!("cannot write {}: {e}", path.display())))?;
         Ok(format!("ok {}", path.display()))
     }
+}
+
+/// The mean brightness (Rec. 709 luma of the sRGB values, of 255) under
+/// which a photo is dark, and the agent is told so. Measured on built-in
+/// draft renders at 160×120 of a closed 4 × 3 m room: at 22:00 with no lamp,
+/// window or not, 2.04 (aerial) and 2.15 (visitor); one ceiling light at
+/// night 31.64 and 12.87, and 6 (visitor) with every surface #404040; by day
+/// 152–180.
+pub(crate) const DARK_LUMA: f64 = 8.0;
+
+/// What the agent is told of a photo darker than [`DARK_LUMA`]: how dark,
+/// as measured, and what would brighten it — never why, which the pixels do
+/// not say (a lamp-lit room in #404040 finishes measured 6). `None` for one
+/// that is not dark. Every renderer's photo is judged here: the built-in one's, and the
+/// one the hosted service has made on a GPU (`crate::photo_dark_note`).
+#[must_use]
+pub(crate) fn dark_note(image: &image::RgbaImage) -> Option<String> {
+    let pixels = f64::from(image.width()) * f64::from(image.height());
+    if pixels == 0.0 {
+        return None;
+    }
+    let sum: f64 = image
+        .pixels()
+        .map(|p| 0.2126 * f64::from(p[0]) + 0.7152 * f64::from(p[1]) + 0.0722 * f64::from(p[2]))
+        .sum();
+    let mean = sum / pixels;
+    (mean < DARK_LUMA).then(|| {
+        format!(
+            "The photo is dark (mean brightness {mean:.0} of 255). More light would brighten it: a lamp (place a light), daylight through a window (hour= by day), or lighter finishes"
+        )
+    })
 }
 
 /// What a photo that ran out of its `max_s` answers.
@@ -1168,6 +1205,103 @@ mod tests {
         );
         std::fs::remove_dir_all(dir).unwrap();
     }
+    /// A photo that comes out dark says how dark, measured, and what would
+    /// brighten it, in its text and its fields — never why: a room with no
+    /// light and a lamp-lit room in dark finishes are both dark. One the day
+    /// or a lamp on light walls brightens comes alone.
+    #[test]
+    fn a_dark_photo_says_how_dark_and_what_would_brighten_it() {
+        let photo = |items: Option<&str>, finish: Option<&str>, hour: f64| {
+            let s = server();
+            let params: CreateParams = serde_json::from_str(
+                r#"{"walls":[{"pts":[[0,0],[400,0],[400,300],[0,300]],"closed":true}],"rooms":[{"name":"Sala","at":[200,150]}]}"#,
+            )
+            .unwrap();
+            s.create(Parameters(params)).unwrap();
+            if let Some(items) = items {
+                crate::call(
+                    s.document.clone(),
+                    "place",
+                    serde_json::from_str(items).unwrap(),
+                )
+                .unwrap();
+            }
+            if let Some(mat) = finish {
+                let sides = ["w1", "w2", "w3", "w4"]
+                    .iter()
+                    .flat_map(|w| [format!("{w}:left"), format!("{w}:right")])
+                    .chain(["r5:floor".to_owned(), "r5:ceiling".to_owned()]);
+                for surface in sides {
+                    crate::call(
+                        s.document.clone(),
+                        "edit_finishes",
+                        serde_json::json!({"action": "assign", "surface": surface, "product": "p-x", "mat": mat}),
+                    )
+                    .unwrap();
+                }
+            }
+            s.render_photo(Parameters(PhotoParams {
+                w: Some(160),
+                h: Some(120),
+                hour: Some(hour),
+                view: Some("visitor".into()),
+                ..PhotoParams::default()
+            }))
+            .unwrap()
+        };
+        let note = |mean: u8| {
+            format!(
+                "The photo is dark (mean brightness {mean} of 255). More light would brighten it: a lamp (place a light), daylight through a window (hour= by day), or lighter finishes"
+            )
+        };
+        let lamp = r#"{"items":[{"cat":"light-ceiling","at":[200,150]}]}"#;
+        for (items, finish, mean) in [(None, None, 2), (Some(lamp), Some("#404040"), 6)] {
+            let dark = photo(items, finish, 22.0);
+            assert_eq!(dark.content.len(), 2, "{:?}", dark.content);
+            assert!(matches!(&dark.content[0], ContentBlock::Image(_)));
+            assert_eq!(
+                dark.content[1].as_text().map(|t| t.text.clone()),
+                Some(note(mean))
+            );
+            assert_eq!(
+                dark.structured_content,
+                Some(serde_json::json!({"mimeType": "image/png", "note": note(mean)}))
+            );
+        }
+        let lit = photo(Some(lamp), None, 22.0);
+        assert_eq!(
+            lit.content.len(),
+            1,
+            "a lamp brightens it: {:?}",
+            lit.content
+        );
+        assert_eq!(lit.structured_content, None);
+        let day = photo(None, None, 12.0);
+        assert_eq!(
+            day.content.len(),
+            1,
+            "the day brightens it: {:?}",
+            day.content
+        );
+    }
+
+    /// The line between dark and lit, on pictures of one grey.
+    #[test]
+    fn dark_is_a_mean_brightness_under_eight() {
+        let grey = |v: u8| image::RgbaImage::from_pixel(4, 4, image::Rgba([v, v, v, 255]));
+        assert!(super::dark_note(&grey(7)).is_some());
+        assert!(super::dark_note(&grey(8)).is_none());
+        assert!(super::dark_note(&grey(0)).is_some());
+        // Green weighs most: 0.7152 × 11 = 7.9 is dark, × 12 = 8.6 is not.
+        let green = |v: u8| image::RgbaImage::from_pixel(4, 4, image::Rgba([0, v, 0, 255]));
+        assert!(super::dark_note(&green(11)).is_some());
+        assert!(super::dark_note(&green(12)).is_none());
+        let red = image::RgbaImage::from_pixel(4, 4, image::Rgba([37, 0, 0, 255]));
+        assert!(super::dark_note(&red).is_some(), "0.2126 × 37 = 7.87");
+        let blue = image::RgbaImage::from_pixel(4, 4, image::Rgba([0, 0, 120, 255]));
+        assert!(super::dark_note(&blue).is_none(), "0.0722 × 120 = 8.66");
+    }
+
     #[test]
     fn render_photo_returns_a_png_at_any_hour() {
         let s = server();

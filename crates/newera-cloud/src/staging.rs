@@ -144,17 +144,18 @@ pub async fn stage(
     args: &Value,
 ) -> anyhow::Result<Result<Option<Staged>, String>> {
     match tool {
-        "place" => place(&app.db, account, args).await,
+        "place" => place(app, account, args).await,
         "edit_finishes" => finish(app, account, args).await,
         _ => Ok(Ok(None)),
     }
 }
 
 async fn place(
-    db: &PgPool,
+    app: &AppState,
     account: &str,
     args: &Value,
 ) -> anyhow::Result<Result<Option<Staged>, String>> {
+    let db = &app.db;
     let named = placed(args);
     if named.is_empty() {
         return Ok(Ok(None));
@@ -165,6 +166,7 @@ async fn place(
         notes: Vec::new(),
     };
     let defaults = args["defaults"].clone();
+    let mut placeholders = Vec::new();
     for (at, id) in named {
         let Some((kind, fields)) = product(db, account, &id).await? else {
             return Ok(Err(no_product(&id)));
@@ -183,10 +185,11 @@ async fn place(
         let path = model_path(&id);
         if !staged.files.iter().any(|(p, _)| *p == path) {
             if model.source == Source::Placeholder {
-                staged.notes.push(placeholder_note(
-                    &id,
-                    model.shape.as_deref().unwrap_or("box"),
-                ));
+                placeholders.push(Placeholder {
+                    id: id.clone(),
+                    shape: model.shape.clone().unwrap_or_else(|| "box".to_owned()),
+                    fields: fields.clone(),
+                });
             }
             staged.files.push((path, model.bytes));
         }
@@ -197,13 +200,74 @@ async fn place(
         };
         point_at(spec, &id, models::dimensions(&fields), &given);
     }
+    if !placeholders.is_empty() {
+        let mut said = Vec::new();
+        for piece in &placeholders {
+            let job = crate::generation::latest(db, &piece.id).await?;
+            said.push(piece.said(job.as_ref(), app.config.generator.is_some()));
+        }
+        staged.notes.push(placeholders_note(&said));
+    }
     Ok(Ok(Some(staged)))
 }
 
-/// What the agent is told of a product placed as a placeholder.
-fn placeholder_note(id: &str, shape: &str) -> String {
+/// A product a `place` call draws as a placeholder.
+struct Placeholder {
+    id: String,
+    /// The catalog piece it is drawn as, or `box`.
+    shape: String,
+    fields: Fields,
+}
+
+impl Placeholder {
+    /// The product by its title and id, and how its model comes: being
+    /// made by its open job (`job`, its latest, as `products` shows it),
+    /// else what gives it one — `generate` only with a generator
+    /// (`generating`) and the product's photo.
+    fn said(&self, job: Option<&Value>, generating: bool) -> String {
+        let title = self.fields.get("title").and_then(|f| f.value.as_str());
+        let named = match title {
+            Some(title) => format!("{title} ({}, drawn as {})", self.id, self.shape),
+            None => format!("{} (drawn as {})", self.id, self.shape),
+        };
+        let status = job.and_then(|j| j["status"].as_str());
+        let how = match status {
+            Some(status @ ("queued" | "running")) => format!(
+                "its model is being made (job {}, {status}) and replaces the placeholder when done; products id={} shows the job",
+                job.and_then(|j| j["id"].as_str()).unwrap_or_default(),
+                self.id
+            ),
+            _ if generating && crate::generation::photo(&self.fields).is_some() => {
+                // A job fails with why it did (`generation`).
+                let failed = match (status, job.and_then(|j| j["error"].as_str())) {
+                    (Some("failed"), Some(why)) => format!("its model could not be made ({why}): "),
+                    _ => String::new(),
+                };
+                format!(
+                    "{failed}edit_products id={} action=generate makes one from its photo, or action=attach_model gives it one",
+                    self.id
+                )
+            }
+            _ if generating => format!(
+                "edit_products id={} action=attach_model gives it a model (action=generate needs its photo: action=set fields image)",
+                self.id
+            ),
+            _ => format!(
+                "edit_products id={} action=attach_model gives it a model",
+                self.id
+            ),
+        };
+        format!("{named}: {how}")
+    }
+}
+
+/// What the agent is told of the products a `place` call drew as
+/// placeholders, in one note: each piece's product (`said`), and where a
+/// model it gets replaces the placeholder.
+fn placeholders_note(said: &[String]) -> String {
     format!(
-        "{id} has no 3D model yet: it is drawn as a placeholder ({shape}), a generated approximation stretched to the piece's box. edit_products action=attach_model gives it a model, which replaces the placeholder at once in the project open now (the editor tab, or the server's copy) and in any other project the next time that project is opened"
+        "No 3D model yet, so drawn as a placeholder — a generated approximation stretched to the piece's box: {}. A model replaces the placeholder at once in the project open now (the editor tab, or the server's copy) and in any other project the next time that project is opened",
+        said.join("; ")
     )
 }
 

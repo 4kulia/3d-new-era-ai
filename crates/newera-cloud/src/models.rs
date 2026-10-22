@@ -35,6 +35,15 @@ pub const MODEL_LIMIT: usize = 20 * 1024 * 1024;
 /// for it is waiting.
 const DOWNLOAD_WAIT: Duration = Duration::from_secs(60);
 
+/// The `User-Agent` a file is fetched with: a browser's. Shops' CDNs turn
+/// other clients away — Praxis's `CloudFront` answered 403 to
+/// `3d-new-era-ai/…`, curl's own, a bare `Mozilla/5.0` and `Mozilla/5.0
+/// (X11; Linux x86_64)`, and 200 to this (measured 2026-10-22 on
+/// `d2fb1ew6v6wv87.cloudfront.net/products/5687264/…`; `Accept` and `Referer`
+/// made no difference). The 3D generator fetches a product's photo with the
+/// same one (`AGENT` in `deploy/spark-generator/fetch.py`).
+pub const BROWSER_AGENT: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36";
+
 /// Where a product's model came from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Source {
@@ -185,7 +194,8 @@ pub async fn download(links: &Links, url: &str) -> anyhow::Result<Result<Vec<u8>
 /// what the file is, in the refusals. The host's addresses are looked up
 /// first, every one must be public (or let in by `links`), and the request
 /// goes to the address checked — a name that resolves elsewhere a moment
-/// later is not asked again. Redirects are not followed. `Ok(Err(why))` for
+/// later is not asked again. Redirects are not followed. It asks as a
+/// browser does ([`BROWSER_AGENT`]). `Ok(Err(why))` for
 /// a link that gave no file: the agent is told why.
 ///
 /// # Errors
@@ -229,7 +239,7 @@ pub async fn fetch(
         .redirect(reqwest::redirect::Policy::none())
         .no_proxy()
         .timeout(DOWNLOAD_WAIT)
-        .user_agent(concat!("3d-new-era-ai/", env!("CARGO_PKG_VERSION")));
+        .user_agent(BROWSER_AGENT);
     if let Some(name) = &domain {
         client = client.resolve(name, first);
     }

@@ -88,7 +88,7 @@ fn tile(fields: &[(&str, Value)]) -> Product {
 }
 
 /// The line every tile test starts from: `quantity` packs of 1.62 m² at
-/// 24.54, for `need` m² on two walls of r1.
+/// 24.54, for `need` m² on two walls of r1; the packs it buys said beside.
 fn tile_line(need: &str, quantity: &str, total: Option<&str>) -> Value {
     json!({
         "kind": "covering",
@@ -98,6 +98,7 @@ fn tile_line(need: &str, quantity: &str, total: Option<&str>) -> Value {
         "url": "https://praxis.nl/tile",
         "quantity": quantity,
         "unit": "pack",
+        "packs": quantity,
         "need": [need, "m2"],
         "unit_price": total.map(|_| "24.54"),
         "currency": "EUR",
@@ -174,6 +175,7 @@ fn without_pack_content_the_quantity_is_the_need() {
     };
     let mut want = tile_line("3.01", "3.01", None);
     want["unit"] = json!("m2");
+    want.as_object_mut().unwrap().remove("packs");
     want["notes"] = json!([
         "pack content unknown (pack_m2): the quantity is what the surfaces need",
         "sold per pack, which the quantity in m2 cannot be counted in",
@@ -188,6 +190,7 @@ fn without_pack_content_the_quantity_is_the_need() {
     ]);
     let mut want = tile_line("3.01", "3.01", Some("33.68"));
     want["unit"] = json!("m2");
+    want.as_object_mut().unwrap().remove("packs");
     want["unit_price"] = json!("11.19");
     want["notes"] =
         json!(["pack content unknown (pack_m2): the quantity is what the surfaces need"]);
@@ -289,6 +292,7 @@ fn paint_is_coats_over_the_spread_rate_in_whole_cans() {
             "url": "https://gamma.nl/paint",
             "quantity": "2",
             "unit": "pack",
+            "packs": "2",
             "need": ["4.9", "litre"],
             "unit_price": "39.99",
             "currency": "EUR",
@@ -385,6 +389,7 @@ fn wallpaper_is_drops_per_wall_in_rolls_for_all_walls() {
         "url": "https://praxis.nl/paper",
         "quantity": "4",
         "unit": "roll",
+        "packs": "4",
         "need": ["3.67", "roll"],
         "unit_price": "29.95",
         "currency": "EUR",
@@ -594,6 +599,7 @@ fn furniture_is_pieces_or_whole_multipacks() {
             "url": "https://ikea.com/chairs",
             "quantity": "2",
             "unit": "pack",
+            "packs": "2",
             "need": ["5", "piece"],
             "unit_price": "79.96",
             "currency": "EUR",
@@ -883,7 +889,7 @@ fn the_csv_has_a_row_per_line_and_the_totals() {
     assert_eq!(
         csv(&estimate(&all, GroupBy::Shop)),
         "group,kind,shop,title,url,quantity,unit,packs,unit_price,currency,vat,total,rooms,surfaces,notes\r\n\
-         praxis.nl,covering,praxis.nl,\"Tegel \"\"Beige\"\", 60x60\",https://praxis.nl/tile,2,pack,,24.54,EUR,included,49.08,r1,w1:right,\r\n\
+         praxis.nl,covering,praxis.nl,\"Tegel \"\"Beige\"\", 60x60\",https://praxis.nl/tile,2,pack,2,24.54,EUR,included,49.08,r1,w1:right,\r\n\
          no shop,extra,,\"x1 work, by the hour\",,1,hour,,10,EUR,unknown,10.00,,,\r\n\
          no shop,unknown,,sofa,,1,piece,,,,unknown,unpriced,,,product sofa is not in this account's library (products lists it)\r\n\
          total,,,,,,,,,,,unpriced,,,\r\n\
@@ -948,5 +954,121 @@ fn a_takeoff_answer_is_read_as_it_is_written() {
             &json!({"finishes": [{"product": "p", "surfaces": [{"net_m2": "x"}]}], "furniture": []})
         ),
         Err("a takeoff surface has no net_m2".to_owned())
+    );
+}
+
+/// The sheet's `packs` column holds the whole packs (cans, rolls, tiles)
+/// every line that counted them buys — also where the quantity already is
+/// those packs, which the line's JSON says once: 8 packs of 1.44 m², 62
+/// tiles of 30×60 cm, 2 multipacks of chairs. A piece of furniture sold alone, a line by m² with
+/// no pack and a line added by hand count no packs.
+#[test]
+fn the_csv_says_the_packs_of_every_line_that_counted_them() {
+    let wall = || vec![covered("w1:right", "r1", "11", None, None, &[])];
+    let by_pack = tile(&[("pack_m2", json!(1.44)), ("price", json!("20.15"))]);
+    let mut per_m2 = tile(&[
+        ("sale_unit", json!("m2")),
+        ("price", json!("13.99")),
+        ("pack_m2", json!(1.44)),
+    ]);
+    per_m2.id = "tile2".to_owned();
+    let mut no_pack = tile(&[("pack_m2", Value::Null), ("sale_unit", json!("m2"))]);
+    no_pack.id = "tile3".to_owned();
+    let mut by_tile = tile(&[
+        ("pack_m2", Value::Null),
+        ("sale_unit", json!("piece")),
+        ("price", json!("2.50")),
+        ("tile_width_cm", json!(30)),
+        ("tile_length_cm", json!(60)),
+    ]);
+    by_tile.id = "tile4".to_owned();
+    let can = paint(&[]);
+    // 11 m² by area, 0.53 × 10.05 m a roll: ⌈2.07⌉ = 3 rolls.
+    let paper = wallpaper(&[]);
+    let chairs = product(
+        "chairs",
+        "ikea.com",
+        Kind::Furniture,
+        &[
+            ("title", json!("TEODORES stoel, 4 st")),
+            ("price", json!("79.96")),
+            ("currency", json!("EUR")),
+            ("sale_unit", json!("piece")),
+            ("pack_pieces", json!(4)),
+        ],
+    );
+    let mut sofa = chairs.clone();
+    sofa.id = "sofa".to_owned();
+    sofa.fields.remove("pack_pieces");
+    let takeoff = Takeoff {
+        finishes: [&by_pack, &per_m2, &no_pack, &by_tile, &can, &paper]
+            .iter()
+            .map(|p| Covers {
+                product: p.id.clone(),
+                surfaces: wall(),
+            })
+            .collect(),
+        furniture: vec![
+            Bought {
+                product: "chairs".to_owned(),
+                ids: (1..=5).map(|i| format!("f{i}")).collect(),
+                rooms: Vec::new(),
+            },
+            Bought {
+                product: "sofa".to_owned(),
+                ids: vec!["f9".to_owned()],
+                rooms: Vec::new(),
+            },
+        ],
+        ..Takeoff::default()
+    };
+    let mut all = lines(
+        &takeoff,
+        &library(vec![
+            by_pack, per_m2, no_pack, by_tile, can, paper, chairs, sofa,
+        ]),
+    );
+    all.push(extra("x1", None, "3", "10", "EUR"));
+    let sheet = csv(&estimate(&all, GroupBy::Kind));
+    let rows: Vec<(String, String, String, String)> = sheet
+        .lines()
+        .skip(1)
+        .filter(|l| !l.starts_with("total,"))
+        .map(|l| {
+            // Cells split at the commas outside quotes.
+            let mut cells = vec![String::new()];
+            let mut quoted = false;
+            for c in l.chars() {
+                match c {
+                    '"' => quoted = !quoted,
+                    ',' if !quoted => cells.push(String::new()),
+                    c => cells.last_mut().unwrap().push(c),
+                }
+            }
+            let at = |name: &str| cells[COLUMNS.iter().position(|c| *c == name).unwrap()].clone();
+            (at("kind"), at("quantity"), at("unit"), at("packs"))
+        })
+        .collect();
+    let row = |kind: &str, q: &str, unit: &str, packs: &str| {
+        (
+            kind.to_owned(),
+            q.to_owned(),
+            unit.to_owned(),
+            packs.to_owned(),
+        )
+    };
+    assert_eq!(
+        rows,
+        [
+            row("covering", "8", "pack", "8"),
+            row("covering", "11.52", "m2", "8"),
+            row("covering", "11", "m2", ""),
+            row("covering", "62", "piece", "62"),
+            row("paint", "1", "pack", "1"),
+            row("wallpaper", "3", "roll", "3"),
+            row("furniture", "2", "pack", "2"),
+            row("furniture", "1", "piece", ""),
+            row("extra", "3", "hour", ""),
+        ]
     );
 }

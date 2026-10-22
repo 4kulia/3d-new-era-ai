@@ -549,6 +549,7 @@ impl Engine {
                 Ok(Some(ask)) => {
                     match crate::renderer::render(renderer, client, &ask, started).await {
                         crate::renderer::Made::Photo(png) => {
+                            let dark = newera_mcp::photo_dark_note(&png);
                             let mut answer = json!({
                                 "content": [{
                                     "type": "image",
@@ -558,6 +559,10 @@ impl Engine {
                                 "isError": false,
                             });
                             newera_mcp::output::structure_json(&mut answer);
+                            // Judged as the built-in renderer's photo is.
+                            if let Some(note) = dark {
+                                newera_mcp::output::add_note(&mut answer, &note);
+                            }
                             return Ok(answer);
                         }
                         crate::renderer::Made::Missed(why) => {
@@ -592,7 +597,7 @@ impl Engine {
                 let mut result = serde_json::to_value(answer)?;
                 // A refusal is an `Err`: only a photo gets here.
                 if let Some(note) = note {
-                    crate::mcp::add_note(&mut result, &note);
+                    newera_mcp::output::add_note(&mut result, &note);
                 }
                 result
             }

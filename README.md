@@ -34,23 +34,31 @@ What it does now:
 - **Product import from a shop link** (`import_product`), through [AnySite](https://anysite.io):
   IKEA through its product adapter; any other shop's page is parsed first and rendered in a
   browser only when the parse left out what the product needs. Each field records where it
-  came from, and what no page showed is listed as missing for the agent to fill
-  (`edit_products`). The same article imported again is the one kept.
+  came from — VAT included by the Dutch market's rule where the shop does not say, as for
+  IKEA NL — and what no page showed is listed as missing for the agent to fill
+  (`edit_products`), a tile's or plank's size included when neither the table nor the title
+  gives it. The same article imported again is the one kept.
 - **A product library in the server's database**, with price history (`refresh` reads
   today's price and VAT again).
 - **3D models generated on a GPU server** (Hunyuan3D-2.0) from the product photo, scaled to
   the shop's width, depth and height: about two minutes per piece. A placed piece shows a
-  placeholder until its model is ready, then the model replaces it; a failed or unreachable
+  placeholder until its model is ready, then the model replaces it; `place` names every piece
+  drawn as a placeholder, with its job's state or how to get a model. A failed or unreachable
   generation is tried up to five times in all, with growing waits between tries.
 - **Finishes that look like the product**: a finish on a whole floor, ceiling or wall side is
-  drawn with its swatch picture tiled at its real size, or a paint's colour. A band of a wall
+  drawn with its swatch picture tiled at its real size, or a paint's colour. Swatches, model
+  files and the generator's product photos are fetched as a browser asks for them, since
+  shops' CDNs turn other clients away. A band of a wall
   (tile below, paint above) counts for purchase only.
 - **Takeoff and a priced estimate**: m² per surface with doors and windows deducted, packs,
   cans and rolls with waste and coats, furniture by the piece, lines of your own (labour,
-  delivery), totals per shop, currency and VAT basis, saved estimates, and a CSV download.
+  delivery), totals per shop, currency and VAT basis, saved estimates, and a CSV download
+  whose `packs` column gives the whole packs, cans, rolls or tiles of every line that counts
+  them.
 - **Photos on the server**: renders always run on the server, after an open editor saves its
   changes. `render_photo` uses Blender Cycles on the GPU server when it answers, and the
-  built-in path tracer otherwise.
+  built-in path tracer otherwise; a photo that comes out dark comes with a note saying how dark
+  and what would brighten it.
 - **Server projects in the web editor**: the editor at
   <https://interioragent.dutch-atlas.com/app/> opens the account's projects, saves them
   automatically and refuses a save over a newer revision. A project opened again draws its

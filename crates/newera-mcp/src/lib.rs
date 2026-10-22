@@ -132,6 +132,15 @@ pub fn render_photo_since(
     Ok(result)
 }
 
+/// What the agent is told of a photo made elsewhere (a PNG) that comes out
+/// dark, as `render_photo` tells it of its own; `None` for a bright enough one
+/// or bytes that are no picture.
+#[must_use]
+pub fn photo_dark_note(png: &[u8]) -> Option<String> {
+    let image = image::load_from_memory(png).ok()?.to_rgba8();
+    tools::render::dark_note(&image)
+}
+
 /// The tools on `document`, and `render_photo`'s arguments read from `args`
 /// as [`call`] reads them.
 fn photo_call(

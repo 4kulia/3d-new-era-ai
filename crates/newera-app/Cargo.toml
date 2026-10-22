@@ -54,4 +54,6 @@ workspace = true
 [dev-dependencies]
 # What the tab decodes (`staged_asset`) is tested natively too.
 base64.workspace = true
+# So is how the tab adds its notes to an answer (`render_job`).
+newera-mcp.workspace = true
 egui_kittest = { version = "0.36.2", features = ["eframe", "wgpu", "snapshot"] }

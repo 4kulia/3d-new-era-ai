@@ -16,7 +16,7 @@
 use serde_json::json;
 
 use crate::anysite::{AnySite, Endpoint, Failure, FetchError};
-use crate::extract::{forget_default_unit, from_ikea, from_page, settle_sale_unit};
+use crate::extract::{dutch_vat, forget_default_unit, from_ikea, from_page, settle_sale_unit};
 use crate::identity::{Identity, Source};
 use crate::product::{Fields, Kind, render_worth_it};
 
@@ -44,6 +44,22 @@ pub struct Fetched {
 /// product with its fields missing, for the agent to fill; so is one whose
 /// render failed after a parse that answered.
 pub async fn fetch(
+    anysite: &AnySite,
+    identity: &Identity,
+    kind: Option<Kind>,
+) -> Result<Fetched, FetchError> {
+    let mut got = read(anysite, identity, kind).await?;
+    // What the shop left unsaid of VAT, the market says: in the
+    // Netherlands a consumer price includes it (IKEA's adapter never says,
+    // recorded `ikea_billy_00263850.json`). Elsewhere it stays unknown.
+    if identity.market == "nl" {
+        dutch_vat(&mut got.fields);
+    }
+    Ok(got)
+}
+
+/// What the shop's adapter or page says of the product.
+async fn read(
     anysite: &AnySite,
     identity: &Identity,
     kind: Option<Kind>,

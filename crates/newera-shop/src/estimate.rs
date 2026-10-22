@@ -196,8 +196,8 @@ pub struct Line {
     pub url: Option<String>,
     pub quantity: String,
     pub unit: String,
-    /// Whole packs (cans, rolls, tiles) bought, when the quantity is in
-    /// the unit they are priced by.
+    /// Whole packs (cans, rolls, tiles, multipacks) bought, wherever they
+    /// were counted — also when the quantity is those packs.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub packs: Option<String>,
     /// What the surfaces need, before packs: `[amount, unit]`.
@@ -516,16 +516,6 @@ fn priced(mut line: Line, product: Option<&Product>, need: Need) -> Option<Line>
     Some(line)
 }
 
-/// A line whose quantity is its packs says so once.
-fn packed(mut line: Line) -> Line {
-    if line.packs.as_deref() == Some(line.quantity.as_str())
-        && matches!(line.unit.as_str(), "pack" | "roll" | "piece")
-    {
-        line.packs = None;
-    }
-    line
-}
-
 fn finish_line(covers: &Covers, product: Option<&Product>) -> Line {
     let surfaces: Vec<&Covered> = covers.surfaces.iter().collect();
     let finish_type = product.and_then(|p| p.text("finish_type"));
@@ -580,8 +570,8 @@ fn finish_line(covers: &Covers, product: Option<&Product>) -> Line {
         out
     };
     match need.and_then(|need| priced(out.clone(), product, need)) {
-        Some(done) if product.is_none() => missing(packed(done)),
-        Some(done) => packed(done),
+        Some(done) if product.is_none() => missing(done),
+        Some(done) => done,
         None => {
             out.notes.push(OVERFLOW.to_owned());
             "0".clone_into(&mut out.quantity);
@@ -618,6 +608,7 @@ fn furniture_line(bought: &Bought, product: Option<&Product>) -> Line {
     out.quantity = packs.to_string();
     if per_pack > 1 {
         "pack".clone_into(&mut out.unit);
+        out.packs = Some(packs.to_string());
         out.need = Some((pieces.to_string(), "piece".to_owned()));
         out.notes
             .push(format!("sold in packs of {per_pack} pieces"));

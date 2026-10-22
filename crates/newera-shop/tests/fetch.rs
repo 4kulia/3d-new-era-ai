@@ -117,6 +117,15 @@ async fn ikea_comes_from_its_adapter() {
     let got = fetch(&anysite, &identity, None).await.unwrap();
     assert_eq!(got.kind, Kind::Furniture);
     assert_eq!(got.fields["price"].value, "49.99");
+    assert_eq!(
+        got.fields["vat_included"],
+        newera_shop::Field {
+            value: json!(true),
+            evidence: newera_shop::Evidence::Market,
+            from: "Dutch consumer prices include VAT".to_owned(),
+        },
+        "the adapter does not say; the Dutch market's rule does"
+    );
     assert_eq!(got.fetches, [log("ikea/products", "ok", Some(5))]);
     assert_eq!(
         *asked.lock().unwrap(),
@@ -126,6 +135,63 @@ async fn ikea_comes_from_its_adapter() {
             json!({"product": "https://www.ikea.com/nl/nl/p/billy-boekenkast-wit-00263850/"})
         )]
     );
+}
+
+/// The Dutch rule is not another market's: an IKEA link outside the
+/// Netherlands has its price and no word on VAT.
+#[tokio::test]
+async fn ikea_outside_the_netherlands_says_nothing_of_vat() {
+    let (anysite, _) = stand_in(&[("ikea/products", "ikea_billy_00263850.json")]).await;
+    let identity =
+        identify("https://www.ikea.com/de/de/p/billy-buecherregal-weiss-00263850/").unwrap();
+    let got = fetch(&anysite, &identity, None).await.unwrap();
+    assert_eq!(got.fields["price"].value, "49.99");
+    assert!(!got.fields.contains_key("vat_included"));
+}
+
+/// A page silent on VAT takes the market's rule in the Netherlands and
+/// nothing elsewhere: a German shop's page is not said to include Dutch VAT.
+#[tokio::test]
+async fn a_page_silent_on_vat_takes_the_rule_of_the_dutch_market_only() {
+    let silent = page_of(
+        "<h1>Kast Alaska</h1><div>135,20</div><dl><dt>Afmetingen (cm)</dt><dd>101x107x35 (hxbxd)</dd></dl>",
+        "1",
+    );
+    for (link, vat) in [
+        (
+            "https://www.leenbakker.nl/kasten/kast-alaska",
+            Some(newera_shop::Field {
+                value: json!(true),
+                evidence: newera_shop::Evidence::Market,
+                from: "Dutch consumer prices include VAT".to_owned(),
+            }),
+        ),
+        ("https://www.moebel.de/schraenke/kast-alaska", None),
+    ] {
+        let (anysite, asked) =
+            stand_in_of(vec![("webparser/parse".to_owned(), silent.clone())]).await;
+        let got = fetch(&anysite, &identify(link).unwrap(), None)
+            .await
+            .unwrap();
+        assert_eq!(got.fields["price"].value, "135.20", "{link}");
+        assert_eq!(got.fields.get("vat_included").cloned(), vat, "{link}");
+        assert_eq!(asked.lock().unwrap().len(), 1, "no render: {link}");
+    }
+}
+
+/// An IKEA item the adapter gives no price is said nothing of VAT: the
+/// market's rule is about a price.
+#[tokio::test]
+async fn an_ikea_item_without_a_price_says_nothing_of_vat() {
+    let mut item = record("ikea_billy_00263850.json");
+    for key in ["price", "previous_price"] {
+        item["body"][0][key] = Value::Null;
+    }
+    let (anysite, _) = stand_in_of(vec![("ikea/products".to_owned(), item)]).await;
+    let identity = identify("https://www.ikea.com/nl/nl/p/billy-boekenkast-wit-00263850/").unwrap();
+    let got = fetch(&anysite, &identity, None).await.unwrap();
+    assert!(!got.fields.contains_key("price"));
+    assert!(!got.fields.contains_key("vat_included"));
 }
 
 /// A page the parse reads in full costs one credit and no render.
@@ -331,7 +397,8 @@ async fn a_render_that_changes_the_kind_changes_what_the_kind_implies() {
         assert_eq!(got.fields["price"].value, "18.13");
         assert_eq!(
             newera_shop::product::needed(got.kind, &got.fields),
-            [] as [&str; 0]
+            ["tile_width_cm", "tile_length_cm"],
+            "the heading says no size"
         );
     }
 }

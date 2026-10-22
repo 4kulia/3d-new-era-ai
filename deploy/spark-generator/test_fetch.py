@@ -93,6 +93,44 @@ class DeadlineTest(unittest.TestCase):
         self.cut_off(SlowBody)
 
 
+class ShopCdn(socketserver.BaseRequestHandler):
+    """Praxis's CloudFront as measured from a Mac (2026-10-22): the full Chrome
+    User-Agent strings are answered, anything else is 403 — this generator's old
+    `ia3d-generator/1`, curl's, a bare `Mozilla/5.0` and `Mozilla/5.0 (X11; Linux x86_64)`."""
+
+    admitted = (
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36",
+        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36",
+    )
+
+    def handle(self) -> None:
+        request = self.request.recv(65536).decode("latin-1")
+        agent = next(
+            (line.split(":", 1)[1].strip() for line in request.split("\r\n") if line.lower().startswith("user-agent:")),
+            "",
+        )
+        if agent in self.admitted:
+            self.request.sendall(b"HTTP/1.1 200 OK\r\nContent-Type: image/webp\r\nContent-Length: 4\r\n\r\nRIFF")
+        else:
+            self.request.sendall(b"HTTP/1.1 403 Forbidden\r\nContent-Type: text/html\r\nContent-Length: 9\r\n\r\nforbidden")
+
+
+class AgentTest(unittest.TestCase):
+    def test_a_shop_cdn_that_admits_only_browsers_gives_the_photo(self) -> None:
+        server = socketserver.ThreadingTCPServer(("127.0.0.1", 0), ShopCdn)
+        server.daemon_threads = True
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        try:
+            cutoff = fetch.Cutoff(5.0)
+            sock = fetch.opened("127.0.0.1", server.server_address[1], "127.0.0.1", cutoff, tls=False)
+            status, _, body = fetch.exchange(sock, "127.0.0.1", "/origin.webp", "http://127.0.0.1/origin.webp", cutoff)
+            cutoff.cancel()
+            self.assertEqual((status, body), (200, b"RIFF"))
+        finally:
+            server.shutdown()
+            server.server_close()
+
+
 class CertificateTest(unittest.TestCase):
     def test_a_photo_host_with_an_untrusted_certificate_is_refused_at_once(self) -> None:
         with tempfile.TemporaryDirectory() as folder:

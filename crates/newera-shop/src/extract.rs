@@ -222,6 +222,11 @@ pub fn from_page(result: &Value, kind: Option<Kind>) -> (Kind, Fields) {
                 _ => "m² per pack or a price per m² on the page",
             };
             put(&mut fields, "finish_type", json!(t), Evidence::Text, from);
+            if t == "covering"
+                && let Some((_, heading)) = page.heading()
+            {
+                heading_tile(heading, &mut fields);
+            }
         }
         if fields.get("finish_type").and_then(|f| f.value.as_str()) != Some("paint")
             && let Some((value, from)) = page.value("Rendement per verpakking")
@@ -476,6 +481,8 @@ fn prices(page: &Page, fields: &mut Fields) {
         let without =
             Regex::new(r"(?i)\bex(?:cl(?:usief|\.)?|\.)?\s*(?:\d+\s*%\s*)?btw").expect("regex");
         let excluded = page.lines.iter().find(|l| without.is_match(l));
+        // A page that says nothing of VAT leaves it to the market's rule,
+        // which the import applies ([`dutch_vat`]).
         match (said, excluded) {
             (Some(line), _) => put(
                 fields,
@@ -491,15 +498,55 @@ fn prices(page: &Page, fields: &mut Fields) {
                 Evidence::Text,
                 line.clone(),
             ),
-            (None, None) => put(
-                fields,
-                "vat_included",
-                json!(true),
-                Evidence::Market,
-                "Dutch consumer prices include VAT",
-            ),
+            (None, None) => {}
         }
     }
+}
+
+/// The Dutch market's rule where the shop says nothing of VAT: a consumer
+/// price includes it. Only a product with a price takes it, and a field the
+/// shop gave stays. `crate::import` applies it to a product of the Dutch
+/// market alone.
+pub fn dutch_vat(fields: &mut Fields) {
+    if fields.contains_key("price") {
+        put(
+            fields,
+            "vat_included",
+            json!(true),
+            Evidence::Market,
+            "Dutch consumer prices include VAT",
+        );
+    }
+}
+
+/// The size of one tile or plank as a covering's heading writes it
+/// (`Wandtegel Bianca - Wit - Keramiek - 30x60 cm - 1,44 m²`), when the
+/// specification table gave none (what it gave stays): the first number
+/// is the width.
+fn heading_tile(heading: &str, fields: &mut Fields) {
+    let size =
+        Regex::new(r"(?i)\b(\d+(?:[.,]\d+)?)\s*x\s*(\d+(?:[.,]\d+)?)\s*cm\b").expect("regex");
+    let Some(c) = size.captures(heading) else {
+        return;
+    };
+    let (Some(w), Some(l)) = (Decimal::parse(&c[1]), Decimal::parse(&c[2])) else {
+        return;
+    };
+    let from = format!("h1 {}", &c[0]);
+    put(
+        fields,
+        "tile_width_cm",
+        json!(w.to_f64()),
+        Evidence::Text,
+        from.clone(),
+    );
+    put(
+        fields,
+        "tile_length_cm",
+        json!(l.to_f64()),
+        Evidence::Text,
+        from,
+    );
 }
 
 /// What a finish is, by how the page says it is sold.
@@ -711,6 +758,31 @@ mod tests {
         assert_eq!(one("unit_price_per", json!("m2")), Some("covering"));
         assert_eq!(one("unit_price_per", json!("piece")), None);
         assert_eq!(one("width_cm", json!(80.0)), None);
+    }
+
+    /// A size in the heading is a tile's only on a covering: a paint's
+    /// heading keeps its size to itself.
+    #[test]
+    fn only_a_covering_takes_its_tile_size_from_the_heading() {
+        let tile = serde_json::json!({
+            "cleaned_html": "<h1>Wandtegel Wit 30x60 cm</h1><dl><dt>Inhoud</dt><dd>1,44 m²</dd></dl>"
+        });
+        let (_, fields) = from_page(&tile, None);
+        assert_eq!(
+            (
+                &fields["tile_width_cm"].value,
+                &fields["tile_length_cm"].value
+            ),
+            (&json!(30.0), &json!(60.0))
+        );
+        let paint = serde_json::json!({
+            "cleaned_html": "<h1>Muurverf proefvlak 30x60 cm</h1><dl><dt>Inhoud</dt><dd>2,5 l</dd></dl>"
+        });
+        let (kind, fields) = from_page(&paint, None);
+        assert_eq!(kind, Kind::Finish);
+        assert_eq!(fields["finish_type"].value, "paint");
+        assert!(!fields.contains_key("tile_width_cm"));
+        assert!(!fields.contains_key("tile_length_cm"));
     }
 
     /// The price is looked for after the heading: a mini-cart's total in

@@ -44,6 +44,19 @@ fn praxis_laminate_is_a_covering_sold_by_the_pack() {
     assert_eq!(fields, expected(PRAXIS_LAMINATE));
 }
 
+/// Praxis wall tile: sold by the pack (`Pakket prijs 20,15`), 13.99 per m²,
+/// 1.44 m² per pack, VAT said on the page, and the tile's size from the
+/// heading (`… - 30x60 cm - 1,44 m²`), which the table gives as `Breedte` and
+/// `Diepte`, words for furniture.
+#[test]
+fn praxis_tile_takes_its_size_from_the_heading() {
+    let (kind, fields) = page("praxis_tile_5687264.parse.json", None);
+    assert_eq!(kind, Kind::Finish);
+    assert_eq!(fields, expected(PRAXIS_TILE));
+    let (_, read) = from_page(&recorded("praxis_tile_5687264.parse.json"), None);
+    assert_eq!(needed(Kind::Finish, &read), [] as [&str; 0]);
+}
+
 /// Praxis paint: the can's price, 16.48 per litre, 2.5 l, 10 m² per litre,
 /// the colour from its sRGB code. `Rendement per verpakking` (25 m²) is a
 /// can's coverage, not a pack of floor, and the can's own size is not a
@@ -470,4 +483,23 @@ const HORNBACH_RENDER: &str = r#"{
   "evidence": "text",
   "from": "prijs — 11,19 € * Alle prijzen zijn incl. BTW en excl. verzendkosten. per m²"
  }
+}"#;
+
+/// What `praxis_tile_5687264.parse.json` reads as, field by field.
+const PRAXIS_TILE: &str = r#"{
+ "brand": {"value": "Overig", "evidence": "text", "from": "Merk Overig"},
+ "colour": {"value": "Wit", "evidence": "text", "from": "Kleur Wit"},
+ "currency": {"value": "EUR", "evidence": "text", "from": "€ / EUR beside the price"},
+ "ean": {"value": "5902610503672", "evidence": "text", "from": "EAN 5902610503672"},
+ "finish_type": {"value": "covering", "evidence": "text", "from": "m² per pack or a price per m² on the page"},
+ "image": {"value": "https://d2fb1ew6v6wv87.cloudfront.net/products/5687264/s00/424x424/origin.webp", "evidence": "text", "from": "the first image described as the heading"},
+ "pack_m2": {"value": 1.44, "evidence": "text", "from": "Inhoud 1.44 m²"},
+ "price": {"value": "20.15", "evidence": "text", "from": "Pakket prijs 20,15"},
+ "sale_unit": {"value": "pack", "evidence": "text", "from": "a price per pack"},
+ "tile_length_cm": {"value": 60.0, "evidence": "text", "from": "h1 30x60 cm"},
+ "tile_width_cm": {"value": 30.0, "evidence": "text", "from": "h1 30x60 cm"},
+ "title": {"value": "Wandtegel Bianca - Wit - Keramiek - 30x60 cm - 1,44 m²", "evidence": "text", "from": "h1"},
+ "unit_price": {"value": "13.99", "evidence": "text", "from": "aria-label EUR 13.99 per m²"},
+ "unit_price_per": {"value": "m2", "evidence": "text", "from": "aria-label EUR 13.99 per m²"},
+ "vat_included": {"value": true, "evidence": "text", "from": "Alle prijzen zijn incl. BTW en excl. eventuele verzendkosten"}
 }"#;

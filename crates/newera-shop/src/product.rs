@@ -185,14 +185,17 @@ pub fn checked(name: &str, value: &Value) -> Result<Value, String> {
 /// what the agent is asked to fill. A finish needs what its type is sold
 /// by — m² per pack for a covering, litres per can and m² per litre for
 /// paint, the roll for wallpaper — so a finish of unknown type lacks its
-/// type first.
+/// type first; a covering also needs the size of one tile or plank, which
+/// its look is drawn at.
 pub fn needed(kind: Kind, fields: &Fields) -> Vec<&'static str> {
     let wanted: Vec<&'static str> = match kind {
         Kind::Furniture => vec!["title", "price", "width_cm", "depth_cm", "height_cm"],
         Kind::Finish => {
             let mut wanted = vec!["title", "price", "finish_type"];
             match fields.get("finish_type").and_then(|f| f.value.as_str()) {
-                Some("covering") => wanted.push("pack_m2"),
+                Some("covering") => {
+                    wanted.extend(["pack_m2", "tile_width_cm", "tile_length_cm"]);
+                }
                 Some("paint") => wanted.extend(["pack_litres", "spread_m2_per_litre"]),
                 Some("wallpaper") => wanted.extend(["roll_width_cm", "roll_length_m"]),
                 _ => {}
@@ -209,12 +212,15 @@ pub fn needed(kind: Kind, fields: &Fields) -> Vec<&'static str> {
 /// Whether a page read by `webparser/parse` lacks what makes the product
 /// usable, so `webparser/render` is worth its price: for furniture the
 /// title, price, width, depth and height; for a finish the title, price and
-/// pack content. A paint's spread rate is asked of the agent, not of a
-/// second fetch.
+/// pack content. A paint's spread rate and a covering's tile size are
+/// asked of the agent, not of a second fetch.
 pub fn render_worth_it(kind: Kind, fields: &Fields) -> bool {
-    needed(kind, fields)
-        .iter()
-        .any(|name| *name != "spread_m2_per_litre")
+    needed(kind, fields).iter().any(|name| {
+        !matches!(
+            *name,
+            "spread_m2_per_litre" | "tile_width_cm" | "tile_length_cm"
+        )
+    })
 }
 
 #[cfg(test)]
@@ -269,10 +275,27 @@ mod tests {
             all.extend_from_slice(extra);
             needed(Kind::Finish, &with(&all))
         };
-        assert_eq!(of("covering", &[]), ["pack_m2"]);
+        assert_eq!(
+            of("covering", &[]),
+            ["pack_m2", "tile_width_cm", "tile_length_cm"]
+        );
         assert_eq!(of("paint", &[]), ["pack_litres", "spread_m2_per_litre"]);
         assert_eq!(of("wallpaper", &[]), ["roll_width_cm", "roll_length_m"]);
-        assert_eq!(of("covering", &[("pack_m2", json!(1.6))]), [] as [&str; 0]);
+        assert_eq!(
+            of("covering", &[("pack_m2", json!(1.6))]),
+            ["tile_width_cm", "tile_length_cm"]
+        );
+        assert_eq!(
+            of(
+                "covering",
+                &[
+                    ("pack_m2", json!(1.6)),
+                    ("tile_width_cm", json!(30)),
+                    ("tile_length_cm", json!(60))
+                ]
+            ),
+            [] as [&str; 0]
+        );
         assert_eq!(
             needed(Kind::Finish, &with(&base)),
             ["finish_type"],
@@ -298,6 +321,19 @@ mod tests {
             Kind::Finish,
             &with(&[("title", json!("t"))])
         ));
+        let covering = with(&[
+            ("title", json!("t")),
+            ("price", json!("1")),
+            ("finish_type", json!("covering")),
+            ("pack_m2", json!(1.44)),
+        ]);
+        assert!(
+            !render_worth_it(Kind::Finish, &covering),
+            "a tile size alone"
+        );
+        let mut no_pack = covering.clone();
+        no_pack.remove("pack_m2");
+        assert!(render_worth_it(Kind::Finish, &no_pack));
     }
 
     #[test]

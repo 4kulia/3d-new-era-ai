@@ -64,25 +64,14 @@ impl Reduced {
     }
 }
 
-/// Adds the reduction note to a tool answer: a last text item in `content`,
-/// and a `note` field in `structuredContent` when that is an object. An
-/// answer that was not reduced, or has no `content` array, is left alone.
+/// Adds the reduction note to a tool answer as every note is added
+/// ([`newera_mcp::output::add_note`]): a last text item in `content`, and
+/// in `structuredContent`'s `note`, beside a note already there. An answer
+/// that was not reduced, or has no `content` array, is left alone.
 #[cfg(any(target_arch = "wasm32", test))]
 pub(crate) fn append_note(result: &mut serde_json::Value, reduced: Option<&Reduced>) {
-    let Some(reduced) = reduced else { return };
-    let note = reduced.note();
-    let Some(content) = result
-        .get_mut("content")
-        .and_then(serde_json::Value::as_array_mut)
-    else {
-        return;
-    };
-    content.push(serde_json::json!({"type":"text", "text":note}));
-    if let Some(structured) = result
-        .get_mut("structuredContent")
-        .and_then(serde_json::Value::as_object_mut)
-    {
-        structured.insert("note".into(), serde_json::json!(note));
+    if let Some(reduced) = reduced {
+        newera_mcp::output::add_note(result, &reduced.note());
     }
 }
 
@@ -301,6 +290,27 @@ mod tests {
         assert_eq!(
             result["structuredContent"],
             serde_json::json!({"mimeType":"image/png", "note":reduced().note()})
+        );
+    }
+    /// A photo's own note (it came out dark) stays beside the reduction's,
+    /// in the fields as in the text.
+    #[test]
+    fn the_reduction_note_joins_the_answers_own() {
+        let mut result = serde_json::json!({
+            "content":[{"type":"image", "data":"AAAA", "mimeType":"image/png"}, {"type":"text", "text":"dark"}],
+            "structuredContent":{"mimeType":"image/png", "note":"dark"}
+        });
+        append_note(&mut result, Some(&reduced()));
+        assert_eq!(
+            result,
+            serde_json::json!({
+                "content":[
+                    {"type":"image", "data":"AAAA", "mimeType":"image/png"},
+                    {"type":"text", "text":"dark"},
+                    {"type":"text", "text":reduced().note()},
+                ],
+                "structuredContent":{"mimeType":"image/png", "note":format!("dark\n{}", reduced().note())}
+            })
         );
     }
     #[test]

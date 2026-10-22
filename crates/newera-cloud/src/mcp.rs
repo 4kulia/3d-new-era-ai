@@ -303,7 +303,7 @@ async fn answer(
                     newera_mcp::output::structure_json(&mut answer);
                     add_notes(&mut answer, &notes);
                     if let Some(note) = note {
-                        add_note(&mut answer, &note);
+                        newera_mcp::output::add_note(&mut answer, &note);
                     }
                     Some(result(&id, answer))
                 }
@@ -429,23 +429,8 @@ async fn elsewhere(app: &AppState, account: &str, active: Option<&str>, shown: &
 fn add_notes(answer: &mut Value, notes: &[String]) {
     if answer["isError"] != true {
         for note in notes {
-            add_note(answer, note);
+            newera_mcp::output::add_note(answer, note);
         }
-    }
-}
-
-/// Tells the agent something about an answer it got, beside it: a line of
-/// text after the content, and `note` among its fields — the shape of the
-/// answer stays what it was.
-pub(crate) fn add_note(answer: &mut Value, note: &str) {
-    if let Some(content) = answer.get_mut("content").and_then(Value::as_array_mut) {
-        content.push(json!({"type": "text", "text": note}));
-    }
-    if let Some(fields) = answer
-        .get_mut("structuredContent")
-        .and_then(Value::as_object_mut)
-    {
-        fields.insert("note".to_owned(), json!(note));
     }
 }
 
