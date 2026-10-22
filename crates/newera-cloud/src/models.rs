@@ -170,22 +170,41 @@ fn too_big(size: usize) -> String {
     )
 }
 
-/// The bytes at `url`, an `http` or `https` link to the public internet,
-/// up to [`MODEL_LIMIT`]. The host's addresses are looked up first, every
-/// one must be public (or let in by `links`), and the request goes to the
-/// address checked — a name that resolves elsewhere a moment later is not
-/// asked again. Redirects are not followed. `Ok(Err(why))` for a link that
-/// gave no file: the agent is told why.
+/// The model at `url`, an `http` or `https` link to the public internet,
+/// up to [`MODEL_LIMIT`] ([`fetch`]).
 ///
 /// # Errors
 ///
 /// When the HTTP client cannot be built; a link that fails is a refusal.
 pub async fn download(links: &Links, url: &str) -> anyhow::Result<Result<Vec<u8>, String>> {
+    fetch(links, url, MODEL_LIMIT, "model", too_big).await
+}
+
+/// The bytes at `url`, an `http` or `https` link to the public internet,
+/// up to `limit` (`too_big` says why a larger one is not taken); `what` is
+/// what the file is, in the refusals. The host's addresses are looked up
+/// first, every one must be public (or let in by `links`), and the request
+/// goes to the address checked — a name that resolves elsewhere a moment
+/// later is not asked again. Redirects are not followed. `Ok(Err(why))` for
+/// a link that gave no file: the agent is told why.
+///
+/// # Errors
+///
+/// When the HTTP client cannot be built; a link that fails is a refusal.
+pub async fn fetch(
+    links: &Links,
+    url: &str,
+    limit: usize,
+    what: &str,
+    too_big: fn(usize) -> String,
+) -> anyhow::Result<Result<Vec<u8>, String>> {
     let Ok(parsed) = url::Url::parse(url) else {
         return Ok(Err(format!("{url} is not a link")));
     };
     if !matches!(parsed.scheme(), "http" | "https") {
-        return Ok(Err(format!("{url}: a model is fetched over http or https")));
+        return Ok(Err(format!(
+            "{url}: a {what} is fetched over http or https"
+        )));
     }
     let port = parsed.port_or_known_default().unwrap_or(80);
     let (domain, addresses): (Option<String>, Vec<SocketAddr>) = match parsed.host() {
@@ -202,7 +221,7 @@ pub async fn download(links: &Links, url: &str) -> anyhow::Result<Result<Vec<u8>
     };
     if let Some(off) = addresses.iter().find(|a| !links.admits(a.ip())) {
         return Ok(Err(format!(
-            "{url}: {} is not on the public internet, and a model is fetched only from there",
+            "{url}: {} is not on the public internet, and a {what} is fetched only from there",
             off.ip()
         )));
     }
@@ -234,7 +253,7 @@ pub async fn download(links: &Links, url: &str) -> anyhow::Result<Result<Vec<u8>
         return Ok(Err(format!("{url} answered {status}")));
     }
     if let Some(length) = response.content_length()
-        && usize::try_from(length).unwrap_or(usize::MAX) > MODEL_LIMIT
+        && usize::try_from(length).unwrap_or(usize::MAX) > limit
     {
         return Ok(Err(too_big(usize::try_from(length).unwrap_or(usize::MAX))));
     }
@@ -243,7 +262,7 @@ pub async fn download(links: &Links, url: &str) -> anyhow::Result<Result<Vec<u8>
         match response.chunk().await {
             Ok(Some(chunk)) => {
                 bytes.extend_from_slice(&chunk);
-                if bytes.len() > MODEL_LIMIT {
+                if bytes.len() > limit {
                     return Ok(Err(too_big(bytes.len())));
                 }
             }
@@ -362,7 +381,7 @@ pub fn look(fields: &Fields, shape: Option<&'static str>) -> Option<Look> {
     let colour = fields
         .get("colour_hex")
         .and_then(|f| f.value.as_str())
-        .and_then(hex);
+        .and_then(newera_shop::look::hex);
     Some(Look {
         catalog: shape,
         size: [w, d, h],
@@ -447,15 +466,6 @@ fn catalog_for(kind: &str) -> Option<&'static newera_catalog::CatalogItem> {
             .split(|c: char| !c.is_alphanumeric())
             .any(|w| wanted.contains(&w))
     })
-}
-
-fn hex(text: &str) -> Option<[u8; 3]> {
-    let digits = text.strip_prefix('#')?;
-    if digits.len() != 6 {
-        return None;
-    }
-    let byte = |at: usize| u8::from_str_radix(digits.get(at..at + 2)?, 16).ok();
-    Some([byte(0)?, byte(2)?, byte(4)?])
 }
 
 /// The placeholder for `look`, as a GLB: the catalog piece (or a box) at its

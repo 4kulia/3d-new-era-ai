@@ -38,7 +38,7 @@ pub(crate) struct EditFinishesParams {
     coats: Option<u32>,
     /// For `assign`: waste %, bought on top for cuts and breakage.
     waste: Option<f64>,
-    /// For `assign`: the surface's look, as `update` takes it (`#rrggbb`, `tiles #ffffff 30x60`, `img:…`).
+    /// For `assign`: the surface's look, as `update` takes it (`#rrggbb`, `tiles #ffffff 30x60`, `img:…`). Hosted, a whole surface without it takes the product's: its swatch at its size, or its colour.
     mat: Option<String>,
 }
 

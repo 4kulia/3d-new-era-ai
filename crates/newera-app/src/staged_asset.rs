@@ -43,6 +43,37 @@ pub(crate) fn keep(
     Ok(serde_json::json!({ "path": path, "kept": true }))
 }
 
+/// A finish's texture replaced with a `tile` (`[across, up]` cm, its new
+/// picture lying the other way, or the product's size changed): every
+/// surface of every variant whose look is that file takes that size
+/// (`newera_core::finishes::retile`). Answers how many elements changed;
+/// none for a message without `tile`.
+///
+/// # Errors
+///
+/// When `tile` is not two sizes above zero, or the document refuses the
+/// change.
+pub(crate) fn retile(
+    doc: &mut newera_core::Document,
+    message: &serde_json::Value,
+) -> Result<usize, String> {
+    let (Some(path), Some(given)) = (message["path"].as_str(), message.get("tile")) else {
+        return Ok(0);
+    };
+    let size = |at: usize| {
+        given
+            .as_array()
+            .filter(|t| t.len() == 2)
+            .and_then(|t| t[at].as_f64())
+            // JSON carries no infinity or NaN: above zero is the check.
+            .filter(|cm| *cm > 0.0)
+    };
+    let (Some(across), Some(up)) = (size(0), size(1)) else {
+        return Err(format!("tile: two sizes in cm above zero, not {given}"));
+    };
+    newera_core::finishes::retile(doc, path, [across, up]).map_err(|e| e.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use serde_json::json;
@@ -101,6 +132,52 @@ mod tests {
             [1, 2]
         );
         newera_core::vfs::unmount(&dir);
+    }
+
+    /// A texture whose new picture lies the other way: the walls drawn
+    /// with it take the size the message says, in one undo step.
+    #[test]
+    fn a_retiled_texture_resizes_the_surfaces_drawn_with_it() {
+        let mut doc = newera_core::Document::default();
+        let mut wall = newera_core::Wall::new(
+            doc.new_wall_id(),
+            newera_core::Point2::new(0.0, 0.0),
+            newera_core::Point2::new(400.0, 0.0),
+        );
+        wall.left_side = Some("img:products/p1/finish.jpg 60x30".parse().unwrap());
+        doc.execute(newera_core::Command::insert(wall)).unwrap();
+        let before = doc.home().clone();
+        let plain = json!({"path": "products/p1/finish.jpg", "data": "", "replace": true});
+        assert_eq!(super::retile(&mut doc, &plain), Ok(0));
+        assert_eq!(doc.home(), &before);
+        let message = json!({"path": "products/p1/finish.jpg", "data": "", "replace": true,
+                             "tile": [30.0, 60.0]});
+        assert_eq!(super::retile(&mut doc, &message), Ok(1));
+        assert_eq!(
+            doc.home().walls[0]
+                .left_side
+                .as_ref()
+                .map(ToString::to_string),
+            Some("img:products/p1/finish.jpg 30x60".to_owned())
+        );
+        assert_eq!(super::retile(&mut doc, &message), Ok(0));
+        doc.undo().unwrap();
+        assert_eq!(doc.home(), &before);
+        // A size that is no size is refused, and changes nothing.
+        for tile in [
+            json!([0.0, 60.0]),
+            json!([30.0, -1.0]),
+            json!([30.0]),
+            json!(["30", 60]),
+            json!(30),
+        ] {
+            let message = json!({"path": "products/p1/finish.jpg", "tile": tile});
+            assert_eq!(
+                super::retile(&mut doc, &message),
+                Err(format!("tile: two sizes in cm above zero, not {tile}"))
+            );
+            assert_eq!(doc.home(), &before);
+        }
     }
 
     #[test]

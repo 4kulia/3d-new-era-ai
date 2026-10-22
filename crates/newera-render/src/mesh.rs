@@ -2653,3 +2653,108 @@ mod cutaway_tests {
         assert_eq!(gone(&home), expected);
     }
 }
+
+/// A finish drawn from a shop product's swatch: its image tiled on a wall's
+/// faces at the sample's real size, wherever the faces are split.
+#[cfg(test)]
+pub(crate) mod finish_texture_tests {
+    use newera_core::{Opening, OpeningKind};
+
+    use super::*;
+
+    /// A 600 cm wall, 250 cm high, both sides in a 60×30 cm tile's picture,
+    /// with a 120 cm window from 110 to 210 cm at its middle.
+    pub(crate) fn tiled_wall(tile: [f64; 2]) -> Home {
+        let mut home = Home::default();
+        let id = home.new_wall_id();
+        let mut wall = Wall::new(id, Point2::new(0.0, 0.0), Point2::new(600.0, 0.0));
+        wall.height = 250.0;
+        let look = Material {
+            image: Some("products/p1/finish.jpg".into()),
+            tile: Some(tile),
+            ..Material::default()
+        };
+        wall.left_side = Some(look.clone());
+        wall.right_side = Some(look);
+        home.walls.push(wall);
+        let id = home.new_furniture_id();
+        let mut window = Furniture {
+            id,
+            catalog: "window".into(),
+            position: Point2::new(300.0, 0.0),
+            elevation: 110.0,
+            width: 120.0,
+            depth: 15.0,
+            height: 100.0,
+            ..Furniture::default()
+        };
+        window.opening = Some(Opening {
+            kind: OpeningKind::Window,
+            ..Opening::default()
+        });
+        home.furniture.push(window);
+        home
+    }
+
+    #[test]
+    fn a_swatch_is_tiled_on_each_wall_face_at_its_real_size() {
+        let mesh = Mesh::from_home(&tiled_wall([60.0, 30.0]), &Selection::new(), &|_| None);
+        assert_eq!(mesh.images, ["products/p1/finish.jpg"]);
+        // The two long faces, each split around the window.
+        let faces: Vec<&Vertex> = mesh
+            .vertices
+            .iter()
+            .filter(|v| v.kind == IMAGE_BASE && v.normal[2].abs() > 0.99)
+            .collect();
+        assert!(faces.len() >= 16, "{}", faces.len());
+        let mut sides = std::collections::BTreeSet::new();
+        for v in &faces {
+            let [x, y] = [v.position[0] * 100.0, v.position[1] * 100.0];
+            // Up the wall: one tile every 30 cm from the floor.
+            assert!((v.uv[1] - y / 30.0).abs() < 1e-3, "{v:?}");
+            // Along it: one tile every 60 cm from the wall's start, read
+            // from the viewer's left on either side.
+            let sign = if v.normal[2] > 0.0 { 1.0 } else { -1.0 };
+            assert!((v.uv[0] - sign * x / 60.0).abs() < 1e-3, "{v:?}");
+            sides.insert(v.normal[2] > 0.0);
+        }
+        assert_eq!(sides.len(), 2, "both sides are drawn with it");
+        let reach = |f: fn(&&&Vertex) -> f32| {
+            let values: Vec<f32> = faces.iter().map(|v| f(&v)).collect();
+            values.iter().copied().fold(f32::MIN, f32::max)
+                - values.iter().copied().fold(f32::MAX, f32::min)
+        };
+        // 600 cm of 60 cm tiles across, 250 cm of 30 cm tiles up.
+        assert!((reach(|v| v.uv[0].abs()) - 10.0).abs() < 1e-3);
+        assert!((reach(|v| v.uv[1]) - 250.0 / 30.0).abs() < 1e-3);
+        // The window's sill and head cut the faces; the tiles carry on
+        // across the cut, at the same place on both pieces.
+        for height in [110.0_f32, 210.0] {
+            assert!(
+                faces
+                    .iter()
+                    .any(|v| (v.position[1] * 100.0 - height).abs() < 1e-3
+                        && (v.uv[1] - height / 30.0).abs() < 1e-3),
+                "{height}"
+            );
+        }
+    }
+
+    /// The picture is drawn at whatever size the sample has: a smaller tile
+    /// repeats more often on the same face.
+    #[test]
+    fn a_smaller_tile_repeats_more_often() {
+        let reach = |tile| {
+            let mesh = Mesh::from_home(&tiled_wall(tile), &Selection::new(), &|_| None);
+            let us: Vec<f32> = mesh
+                .vertices
+                .iter()
+                .filter(|v| v.kind == IMAGE_BASE && v.normal[2].abs() > 0.99)
+                .map(|v| v.uv[0].abs())
+                .collect();
+            us.iter().copied().fold(f32::MIN, f32::max)
+        };
+        assert!((reach([30.0, 30.0]) - 20.0).abs() < 1e-3);
+        assert!((reach([120.0, 20.0]) - 5.0).abs() < 1e-3);
+    }
+}

@@ -35,6 +35,7 @@ pub mod products;
 pub mod renderer;
 pub mod secret;
 pub mod staging;
+pub mod textures;
 
 use std::sync::Arc;
 

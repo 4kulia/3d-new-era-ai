@@ -1132,3 +1132,155 @@ mod tests {
 
 #[cfg(test)]
 mod cache_tests;
+
+/// A wall drawn with a shop tile's picture, as each renderer gets it: the
+/// built-in one draws it at the tile's size, and the GLB the photo
+/// renderer reads carries the picture and the same tiling.
+#[cfg(test)]
+mod finish_texture_tests {
+    use crate::mesh::finish_texture_tests::tiled_wall;
+    use crate::mesh::{IMAGE_BASE, Mesh};
+    use crate::{Selection, Side, View};
+
+    fn number(value: &serde_json::Value) -> usize {
+        usize::try_from(value.as_u64().unwrap()).unwrap()
+    }
+
+    /// A JPEG of one tile in four quarters: red at its top left and bottom
+    /// right, blue at the other two.
+    fn swatch() -> Vec<u8> {
+        let image = image::RgbImage::from_fn(64, 32, |x, y| {
+            if (x < 32) == (y < 16) {
+                image::Rgb([200, 30, 30])
+            } else {
+                image::Rgb([30, 30, 200])
+            }
+        });
+        let mut out = std::io::Cursor::new(Vec::new());
+        image.write_to(&mut out, image::ImageFormat::Jpeg).unwrap();
+        out.into_inner()
+    }
+
+    #[test]
+    fn the_glb_carries_the_picture_and_its_tiling() {
+        let mesh = Mesh::from_home(&tiled_wall([60.0, 30.0]), &Selection::new(), &|_| None);
+        let jpeg = swatch();
+        let glb = crate::export::glb(&mesh, &|file| {
+            (file == "products/p1/finish.jpg").then(|| (jpeg.clone(), "jpg".to_owned()))
+        });
+        let json_len = u32::from_le_bytes(glb[12..16].try_into().unwrap()) as usize;
+        let json: serde_json::Value = serde_json::from_slice(&glb[20..20 + json_len]).unwrap();
+        let bin = &glb[20 + json_len + 8..];
+        assert_eq!(json["images"].as_array().unwrap().len(), 1, "{json}");
+        assert_eq!(json["images"][0]["mimeType"], "image/jpeg");
+        let view = &json["bufferViews"][number(&json["images"][0]["bufferView"])];
+        let at = number(&view["byteOffset"]);
+        let len = number(&view["byteLength"]);
+        assert_eq!(&bin[at..at + len], jpeg.as_slice(), "the picture itself");
+        assert_eq!(json["textures"], serde_json::json!([{"source": 0}]));
+        // No sampler: glTF's default, which repeats the picture.
+        assert!(json.get("samplers").is_none(), "{json}");
+        let textured: Vec<&serde_json::Value> = json["materials"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|m| m["pbrMetallicRoughness"]["baseColorTexture"].is_object())
+            .collect();
+        assert_eq!(textured.len(), 1, "{json}");
+        assert_eq!(
+            textured[0]["pbrMetallicRoughness"]["baseColorTexture"],
+            serde_json::json!({"index": 0})
+        );
+        assert_eq!(
+            textured[0]["pbrMetallicRoughness"]["baseColorFactor"],
+            serde_json::json!([1, 1, 1, 1]),
+            "the picture untinted"
+        );
+        // Texture coordinates in tiles, as the editor draws them (glTF's v
+        // runs down).
+        let uvs = &json["accessors"][2];
+        let view = &json["bufferViews"][number(&uvs["bufferView"])];
+        let at = number(&view["byteOffset"]);
+        let floats: Vec<f32> = bin[at..at + number(&view["byteLength"])]
+            .chunks(4)
+            .map(|b| f32::from_le_bytes(b.try_into().unwrap()))
+            .collect();
+        assert_eq!(floats.len(), mesh.vertices.len() * 2);
+        let mut tiled = 0;
+        for (v, uv) in mesh.vertices.iter().zip(floats.chunks(2)) {
+            assert_eq!([uv[0], -uv[1]], v.uv);
+            if v.kind == IMAGE_BASE && v.normal[2].abs() > 0.99 {
+                assert!((uv[1] + v.position[1] * 100.0 / 30.0).abs() < 1e-3);
+                tiled += 1;
+            }
+        }
+        assert!(tiled >= 16, "{tiled}");
+    }
+
+    /// How often red gives way to blue along `pixels`: once per tile.
+    fn red_to_blue(pixels: impl Iterator<Item = [u8; 4]>) -> usize {
+        let mut last = None;
+        let mut changes = 0;
+        for [r, _, b, _] in pixels {
+            let half = if i32::from(r) - i32::from(b) > 40 {
+                Some('r')
+            } else if i32::from(b) - i32::from(r) > 40 {
+                Some('b')
+            } else {
+                None
+            };
+            if let Some(half) = half {
+                if last == Some('r') && half == 'b' {
+                    changes += 1;
+                }
+                last = Some(half);
+            }
+        }
+        changes
+    }
+
+    /// The tiles the render shows across the wall, 50 cm above the floor,
+    /// and up it, at its first metre.
+    fn tiles_shown(tile: [f64; 2]) -> ([usize; 2], image::RgbaImage) {
+        let home = tiled_wall(tile);
+        let dir = std::path::PathBuf::from(format!(
+            "/memory/finish-texture-render-{}-{}",
+            tile[0], tile[1]
+        ));
+        newera_core::vfs::mount(&dir, [("products/p1/finish.jpg".to_owned(), swatch())]);
+        let front = View::orthographic(&home, Side::Front, 1.5, None);
+        let image = crate::render_home(&home, &front, 600, 400, Some(&dir));
+        newera_core::vfs::unmount(&dir);
+        let sky = home.environment.sky_color;
+        let is_sky = |x: u32, y: u32| {
+            let p = image.get_pixel(x, y).0;
+            [p[0], p[1], p[2]] == sky
+        };
+        // The wall's height in the image, from its first column of wall.
+        let column = 150;
+        let rows: Vec<u32> = (0..image.height())
+            .filter(|y| !is_sky(column, *y))
+            .collect();
+        let (top, bottom) = (rows[0], *rows.last().unwrap());
+        // 50 cm above the floor: below the window.
+        let row = bottom - (bottom - top) * 50 / 250;
+        let across = red_to_blue((0..image.width()).map(|x| image.get_pixel(x, row).0));
+        let up = red_to_blue((top..=bottom).map(|y| image.get_pixel(column, y).0));
+        ([across, up], image)
+    }
+
+    #[test]
+    fn the_built_in_renderer_draws_the_picture_at_the_tile_s_size() {
+        // 600 cm of wall: ten 60 cm tiles, twenty 30 cm ones; 250 cm up it:
+        // eight and a third 30 cm tiles, sixteen and two thirds 15 cm ones.
+        let ([across, up], image) = tiles_shown([60.0, 30.0]);
+        if let Ok(path) = std::env::var("NEWERA_TILE_RENDER_PNG") {
+            image.save(path).unwrap();
+        }
+        assert!((9..=11).contains(&across), "{across}");
+        assert!((8..=9).contains(&up), "{up}");
+        let ([across, up], _) = tiles_shown([30.0, 15.0]);
+        assert!((19..=21).contains(&across), "{across}");
+        assert!((16..=17).contains(&up), "{up}");
+    }
+}

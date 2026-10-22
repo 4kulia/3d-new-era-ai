@@ -1980,7 +1980,7 @@
           "type": "integer"
         },
         "mat": {
-          "description": "For `assign`: the surface's look, as `update` takes it (`#rrggbb`, `tiles #ffffff 30x60`, `img:…`)",
+          "description": "For `assign`: the surface's look, as `update` takes it (`#rrggbb`, `tiles #ffffff 30x60`, `img:…`). Hosted, a whole surface without it takes the product's: its swatch at its size, or its colour",
           "type": "string"
         },
         "product": {
@@ -2786,7 +2786,7 @@
       "readOnlyHint": false,
       "title": "Change shop products"
     },
-    "description": "Change a product in the library. set {fields}: fill in or correct fields (price, pack_m2, width_cm…), kept as the agent's; refresh: read the shop again for today's price, VAT and price per unit, which replace the old ones and are added to the price history (title, size and pack stay as they are); attach_model {url, generator?}: keep the .glb at url as its 3D file, which place draws and which replaces its placeholder where it is open; generate: have the server make its 3D file from its picture (field image, https) at its width, depth and height (all three set), replacing the placeholder when done (products shows the job); remove: delete it. Reply: the product as products shows it. products reads the library.",
+    "description": "Change a product in the library. set {fields}: fill in or correct fields (price, pack_m2, width_cm…), kept as the agent's — swatch_image, with tile_width_cm/tile_length_cm or roll_width_cm/pattern_repeat_cm, is the look on a surface, replaced where it shows; refresh: read the shop again for today's price, VAT and price per unit, which replace the old ones and are added to the price history (title, size and pack stay as they are); attach_model {url, generator?}: keep the .glb at url as its 3D file, which place draws and which replaces its placeholder where it is open; generate: have the server make its 3D file from its picture (field image, https) at its width, depth and height (all three set), replacing the placeholder when done (products shows the job); remove: delete it. Reply: the product as products shows it. products reads the library.",
     "inputSchema": {
       "properties": {
         "action": {

@@ -437,7 +437,7 @@ fn product_fields() -> Vec<(&'static str, Value)> {
         (
             "files",
             list(
-                "Its 3D model, once it has one: [kind (model), source (shop, generated or placeholder), generator, bytes, kept (unix seconds)]",
+                "Its 3D model, or a finish's texture from its swatch, once kept: [kind (model or texture), source (shop, generated or placeholder), generator, bytes, kept (unix seconds)]",
             ),
         ),
         (
@@ -1134,7 +1134,7 @@ pub(crate) fn schema(name: &str) -> Option<Value> {
             fields.push(("removed", flag("The product was deleted")));
             fields.push((
                 "drawn",
-                text("For attach_model: where the new model is drawn already, and where it waits for the product's next placement"),
+                text("For attach_model, or set of a finish's swatch or size: where the new file is drawn already, and where it waits for the product's next use"),
             ));
             shape(&fields, &["id"])
         }

@@ -10,14 +10,23 @@
 //! `place` keeps on the piece. A width, depth or height the call does not
 //! give is the shop's, and the model is stretched to the piece's box.
 //!
+//! A finish assigned to a whole surface without a `mat` takes the product's
+//! look (`newera_shop::look`): its swatch picture, kept as
+//! `products/<id>/finish.jpg` (`crate::textures`) and drawn tiled at the
+//! sample's real size, or the shop's colour. The agent is told what to set
+//! when the product has neither. A band is a purchase only: the side's look
+//! is left as it is.
+//!
 //! The files go to whichever side runs the call, before it runs: into the
 //! engine's copy of the project, or to the open editor tab over the relay
 //! (`mcp.rs`). Either way they are among the project's files, and the next
-//! save carries them inside the `.newera`. A model attached later replaces
-//! the file where it is open now ([`swap`]).
+//! save carries them inside the `.newera`. A model attached later, or a
+//! finish's new swatch, replaces the file where it is open now ([`swap`],
+//! [`swap_texture`]).
 
 use std::time::Duration;
 
+use newera_shop::look::Look;
 use newera_shop::product::Fields;
 use serde_json::{Value, json};
 use sqlx::PgPool;
@@ -26,6 +35,7 @@ use sqlx::types::Json;
 use crate::AppState;
 use crate::accounts::Plan;
 use crate::models::{self, Source};
+use crate::textures::Unused;
 
 /// How long the tab may take to keep a product's file: one socket message
 /// of up to `models::MODEL_LIMIT` as base64. A chosen bound, not a measured
@@ -123,14 +133,14 @@ fn no_product(id: &str) -> String {
 ///
 /// When the database fails.
 pub async fn stage(
-    db: &PgPool,
+    app: &AppState,
     account: &str,
     tool: &str,
     args: &Value,
 ) -> anyhow::Result<Result<Option<Staged>, String>> {
     match tool {
-        "place" => place(db, account, args).await,
-        "edit_finishes" => finish(db, account, args).await,
+        "place" => place(&app.db, account, args).await,
+        "edit_finishes" => finish(app, account, args).await,
         _ => Ok(Ok(None)),
     }
 }
@@ -208,34 +218,100 @@ pub async fn swap(
     product: &str,
     bytes: &[u8],
 ) -> anyhow::Result<String> {
-    let path = model_path(product);
+    swap_file(
+        app,
+        account,
+        plan,
+        &model_path(product),
+        bytes,
+        None,
+        "the next time the product is placed there",
+    )
+    .await
+}
+
+/// Where a finish's new texture is drawn now, for `edit_products`' answer:
+/// as [`swap`] does with a model, at the texture's path; with `tile`, the
+/// surfaces drawn with it take that size, as its new picture may lie the
+/// other way. Any other project takes it the next time `edit_finishes`
+/// puts the product on a surface there.
+///
+/// # Errors
+///
+/// When the database fails, or the engine cannot write the file.
+pub async fn swap_texture(
+    app: &AppState,
+    account: &str,
+    plan: &Plan,
+    product: &str,
+    bytes: &[u8],
+    tile: Option<[f64; 2]>,
+) -> anyhow::Result<String> {
+    swap_file(
+        app,
+        account,
+        plan,
+        &crate::textures::texture_path(product),
+        bytes,
+        tile,
+        "the next time edit_finishes puts the product on a surface there",
+    )
+    .await
+}
+
+/// Replaces the file at `path` where the open document draws with it: the
+/// editor tab holding the room, else the server's open copy (saved); with
+/// `tile`, the surfaces drawn with it take that size there. The answer says
+/// where, and that any other project takes it `later`.
+async fn swap_file(
+    app: &AppState,
+    account: &str,
+    plan: &Plan,
+    path: &str,
+    bytes: &[u8],
+    tile: Option<[f64; 2]>,
+    later: &str,
+) -> anyhow::Result<String> {
     if let Some(room) = app.rooms.owned_by(account) {
         return Ok(
-            match newera_relay::replace_in(&app.rooms, &room, &path, bytes, STAGE_WAIT).await {
-                Ok(kept) if kept["kept"] == true => "in the open editor tab now; any other project takes it the next time the product is placed there".to_owned(),
+            match newera_relay::replace_in(&app.rooms, &room, path, bytes, tile, STAGE_WAIT).await {
+                // A texture sent with its size is drawn right only when the
+                // tab says how many elements it resized: an older editor
+                // says nothing, a failed resize says why.
+                Ok(kept) if kept["kept"] == true && tile.is_some() && !kept["retiled"].is_u64() => {
+                    let why = kept["retiled"]
+                        .as_str()
+                        .unwrap_or("the tab did not resize them");
+                    format!(
+                        "the picture is replaced in the open editor tab, but the surfaces drawn with it keep their size ({why}): reload the tab, then edit_finishes assign again; any other project takes it {later}"
+                    )
+                }
+                Ok(kept) if kept["kept"] == true => {
+                    format!("in the open editor tab now; any other project takes it {later}")
+                }
                 // The tab's document does not draw the product.
-                Ok(_) => "each project takes it the next time the product is placed there".to_owned(),
-                Err(why) => format!(
-                    "not in the open editor tab ({why}); each project takes it the next time the product is placed there"
-                ),
+                Ok(_) => format!("each project takes it {later}"),
+                Err(why) => {
+                    format!("not in the open editor tab ({why}); each project takes it {later}")
+                }
             },
         );
     }
     Ok(
         if app
             .engine
-            .swap_in(&app.db, account, plan, &path, bytes)
+            .swap_in(&app.db, account, plan, path, bytes, tile)
             .await?
         {
-            "in the active project now, saved with it; any other project takes it the next time the product is placed there".to_owned()
+            format!("in the active project now, saved with it; any other project takes it {later}")
         } else {
-            "each project takes it the next time the product is placed there".to_owned()
+            format!("each project takes it {later}")
         },
     )
 }
 
 async fn finish(
-    db: &PgPool,
+    app: &AppState,
     account: &str,
     args: &Value,
 ) -> anyhow::Result<Result<Option<Staged>, String>> {
@@ -243,7 +319,7 @@ async fn finish(
         return Ok(Ok(None));
     };
     let id = product_ref(given).unwrap_or_else(|| given.trim());
-    let Some((kind, _)) = product(db, account, id).await? else {
+    let Some((kind, fields)) = product(&app.db, account, id).await? else {
         return Ok(Err(no_product(id)));
     };
     if kind == "furniture" {
@@ -251,13 +327,108 @@ async fn finish(
             "{id} is a piece of furniture: place model=product:{id} puts it in the room"
         )));
     }
-    let mut args = args.clone();
-    args["product"] = json!(id);
-    Ok(Ok(Some(Staged {
-        args,
+    let mut staged = Staged {
+        args: args.clone(),
         files: Vec::new(),
         notes: Vec::new(),
-    })))
+    };
+    staged.args["product"] = json!(id);
+    // The look the call gives is the one the surface takes; a band is a
+    // purchase only, and the side's look stays as it is.
+    let assigns = args["action"] == "assign";
+    let said = args.get("mat").is_some_and(|m| !m.is_null());
+    let banded = args.get("band").is_some_and(|b| !b.is_null());
+    if !assigns || said {
+        return Ok(Ok(Some(staged)));
+    }
+    if banded {
+        staged.notes.push(
+            "a band carries only the purchase: the side's look stays as it is (mat sets it, for the whole side)"
+                .to_owned(),
+        );
+        return Ok(Ok(Some(staged)));
+    }
+    let appearance = newera_shop::look::appearance(&fields);
+    let colour = appearance.colour;
+    let mut drawn_as_colour = false;
+    match appearance.look {
+        Some(Look::Picture { url, size, hangs }) => {
+            let plan = crate::accounts::plan_of(&app.db, account).await?;
+            match crate::textures::for_swatch(&app.db, &app.links, account, &plan, id, &url).await?
+            {
+                Ok(bytes) => {
+                    let px = crate::textures::dimensions(&bytes)
+                        .ok_or_else(|| anyhow::anyhow!("a kept texture of {id} has no size"))?;
+                    staged.args["mat"] = json!(crate::textures::material(
+                        id,
+                        crate::textures::drawn_size(size, hangs, px)
+                    ));
+                    staged
+                        .files
+                        .push((crate::textures::texture_path(id), bytes));
+                }
+                Err(unused) => {
+                    if let Some(rgb) = colour {
+                        staged.args["mat"] = json!(crate::textures::colour(rgb));
+                    }
+                    let now = if colour.is_some() {
+                        "in its colour"
+                    } else {
+                        "with the look the surface had"
+                    };
+                    staged.notes.push(match unused {
+                        Unused::Picture(why) => format!(
+                            "{id}'s swatch picture could not be used ({why}), so it is drawn {now}: edit_products action=set fields swatch_image gives it another"
+                        ),
+                        Unused::NoRoom(why) => format!(
+                            "{id}'s texture was not kept ({why}), so it is drawn {now}: make room in the plan's storage (projects, products), then edit_finishes assign again"
+                        ),
+                    });
+                }
+            }
+        }
+        Some(Look::Colour(rgb)) => {
+            staged.args["mat"] = json!(crate::textures::colour(rgb));
+            drawn_as_colour = true;
+        }
+        None => {}
+    }
+    if !appearance.to_set.is_empty() {
+        staged
+            .notes
+            .push(look_note(id, drawn_as_colour, &appearance.to_set));
+    }
+    Ok(Ok(Some(staged)))
+}
+
+/// What the agent is told of a finish drawn without its picture, or with
+/// no look of its own: which fields would give it one.
+fn look_note(id: &str, drawn_as_colour: bool, to_set: &[&str]) -> String {
+    let now = if drawn_as_colour {
+        "it is drawn in its colour"
+    } else {
+        "the surface keeps the look it had"
+    };
+    if to_set.contains(&"finish_type") {
+        return format!(
+            "{id} has no finish_type, which says what its look is made of, so {now}: edit_products action=set fields finish_type (covering, paint or wallpaper), then edit_finishes assign again"
+        );
+    }
+    let fields = to_set.join(", ");
+    let swatch = if to_set.contains(&"swatch_image") {
+        " (swatch_image: a picture of one tile or plank, or of one wallpaper repeat across the roll, never of the pack or a room)"
+    } else {
+        ""
+    };
+    if drawn_as_colour {
+        format!(
+            "{id} is drawn in its colour: edit_products action=set fields {fields}{swatch} draws it as it looks, at its size, once edit_finishes assigns it again"
+        )
+    } else {
+        format!(
+            "{id} has no look of its own, so the surface keeps the one it had: edit_products action=set fields {fields}{swatch} gives it one, drawn once edit_finishes assigns it again"
+        )
+    }
 }
 
 #[cfg(test)]

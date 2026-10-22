@@ -2475,7 +2475,7 @@ async fn a_put_counts_against_the_plan_storage() {
     assert_eq!(refused.status(), 413);
     assert_eq!(
         refused.json::<Value>().await.unwrap(),
-        json!({"error": "the Tiny plan stores 1 MB and this would take 1 MB"})
+        json!({"error": "the Tiny plan stores 1 MB and this would take 1.1 MB"})
     );
     assert_eq!(stored(&state, &id).await, before);
     // With the other one gone, it fits.
@@ -4105,7 +4105,7 @@ async fn the_editor_makes_no_project_beyond_the_plan() {
     assert_eq!(full.status(), 413);
     assert_eq!(
         full.json::<Value>().await.unwrap(),
-        json!({"error": "the Tiny plan stores 1 MB and this would take 1 MB"})
+        json!({"error": "the Tiny plan stores 1 MB and this would take 1.1 MB"})
     );
     assert_eq!(projects().await, 3);
     // And the AI's own new project is held to the same room.
@@ -4118,7 +4118,7 @@ async fn the_editor_makes_no_project_beyond_the_plan() {
     .await;
     assert_eq!(
         refused,
-        json!({"content": [{"type": "text", "text": "the Tiny plan stores 1 MB and this would take 1 MB"}], "isError": true})
+        json!({"content": [{"type": "text", "text": "the Tiny plan stores 1 MB and this would take 1.1 MB"}], "isError": true})
     );
     assert_eq!(projects().await, 3);
 }
@@ -5934,7 +5934,7 @@ async fn a_model_over_the_plans_storage_is_not_kept() {
             json!({"id": "p1", "action": "attach_model", "url": format!("{files}/sofa.glb")}),
         )
         .await,
-        refusal("the model was not kept: the Tiny plan stores 0 MB and this would take 0 MB")
+        refusal("the model was not kept: the Tiny plan stores 0 MB and this would take 0.1 MB")
     );
     let kept: i64 = sqlx::query_scalar("select count(*) from product_assets")
         .fetch_one(&state.db)
@@ -6745,7 +6745,7 @@ async fn a_model_that_cannot_be_kept_fails_its_job() {
     let failed = job_when(&base, &access, "no-room", |j| j["status"] == "failed").await;
     assert_eq!(
         failed["error"],
-        "the model was not kept: the Tiny plan stores 0 MB and this would take 0 MB"
+        "the model was not kept: the Tiny plan stores 0 MB and this would take 0.1 MB"
     );
     let kept: i64 = sqlx::query_scalar("select count(*) from product_assets")
         .fetch_one(&state.db)
@@ -7564,4 +7564,742 @@ async fn max_s_bounds_the_gpu_wait_and_the_fallback_together() {
         json!({"content": [{"type": "text", "text": "stopped after max_s=1 s; nothing in the project changed (estimate=true says what it takes; draft, fewer pixels or threads cost less)"}], "isError": true})
     );
     assert_eq!(draft_renders(&state).await, 0, "no photo, nothing counted");
+}
+
+// ------------------------------------------------------- finish textures
+
+/// A shop's pictures of its finishes: a tile's swatch lying down
+/// (400×200), one standing up (200×400), and a page that is no picture.
+async fn swatch_server() -> String {
+    let png = |w: u32, h: u32| {
+        let image = image::RgbImage::from_fn(w, h, |x, y| {
+            if (x < w / 2) == (y < h / 2) {
+                image::Rgb([200, 30, 30])
+            } else {
+                image::Rgb([30, 30, 200])
+            }
+        });
+        let mut out = std::io::Cursor::new(Vec::new());
+        image.write_to(&mut out, image::ImageFormat::Png).unwrap();
+        out.into_inner()
+    };
+    let (wide, tall) = (png(400, 200), png(200, 400));
+    let app = axum::Router::new()
+        .route(
+            "/tile.png",
+            axum::routing::get(move || async move { wide.clone() }),
+        )
+        .route(
+            "/tall.png",
+            axum::routing::get(move || async move { tall.clone() }),
+        )
+        .route(
+            "/page.png",
+            axum::routing::get(|| async { "<html>no picture</html>" }),
+        );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    base
+}
+
+/// A 30×60 cm tile whose swatch is `swatch`, and a paint in #f2efe6, in
+/// the account's library.
+async fn stock_finishes(state: &AppState, email: &str, swatch: &str) {
+    let account = account_id(state, email).await;
+    stock(
+        state,
+        &account,
+        "tile",
+        "https://www.praxis.nl/tegel/1",
+        "finish",
+        json!({"title": "Tegel", "finish_type": "covering", "pack_m2": 1.44,
+               "swatch_image": swatch, "tile_width_cm": 30.0, "tile_length_cm": 60.0,
+               "image": "https://www.praxis.nl/pack.jpg"}),
+    )
+    .await;
+    stock(
+        state,
+        &account,
+        "paint",
+        "https://www.praxis.nl/verf/1",
+        "finish",
+        json!({"title": "Verf", "finish_type": "paint", "colour_hex": "#f2efe6",
+               "pack_litres": 2.5, "spread_m2_per_litre": 10.0}),
+    )
+    .await;
+}
+
+/// The texture kept for `product`: its bytes and the link it was made from.
+async fn kept_texture(state: &AppState, product: &str) -> (Vec<u8>, String) {
+    sqlx::query_as(
+        "select data, basis from product_assets where product_id = $1 and kind = 'texture'",
+    )
+    .bind(product)
+    .fetch_one(&state.db)
+    .await
+    .unwrap()
+}
+
+/// The stored project's first wall and the file at `path` inside it.
+async fn stored_wall(
+    state: &AppState,
+    project: &str,
+    path: &str,
+) -> (newera_core::Wall, Option<Vec<u8>>) {
+    let (_, bytes) = stored(state, project).await;
+    let (project, files) = newera_core::project_from_bytes(&bytes).unwrap();
+    let wall = project.variants[0].1.walls[0].clone();
+    let file = files
+        .into_iter()
+        .find(|(name, _)| name == path)
+        .map(|(_, data)| data);
+    (wall, file)
+}
+
+/// A tile put on a whole wall side with no tab open looks like the tile:
+/// its swatch, kept as the product's texture, drawn at the tile's size the
+/// way the picture lies, and saved inside the project; a paint is its
+/// colour. The look the call gives wins.
+#[tokio::test]
+async fn a_finish_put_on_a_wall_on_the_server_looks_like_its_product() {
+    let Some((base, state)) = service().await else {
+        return;
+    };
+    let pictures = swatch_server().await;
+    state.links.allow_for_tests("127.0.0.1".parse().unwrap());
+    let (_, access, project) = drawn_project(&base, &state, "a@example.com").await;
+    let swatch = format!("{pictures}/tile.png");
+    stock_finishes(&state, "a@example.com", &swatch).await;
+    let assigned = tool(
+        &base,
+        &access,
+        "edit_finishes",
+        json!({"action": "assign", "surface": "w1:left", "product": "product:tile"}),
+    )
+    .await;
+    assert_eq!(assigned["isError"], false, "{assigned}");
+    assert_eq!(
+        assigned["content"].as_array().unwrap().len(),
+        1,
+        "nothing to tell: {assigned}"
+    );
+    let (texture, basis) = kept_texture(&state, "tile").await;
+    assert_eq!(basis, swatch);
+    assert_eq!(
+        newera_cloud::textures::dimensions(&texture),
+        Some([400, 200])
+    );
+    let (wall, file) = stored_wall(&state, &project, "products/tile/finish.jpg").await;
+    assert_eq!(
+        wall.left_side,
+        Some(newera_core::Material {
+            image: Some("products/tile/finish.jpg".into()),
+            tile: Some([60.0, 30.0]),
+            ..newera_core::Material::default()
+        }),
+        "the picture lies down, so the tile does"
+    );
+    assert_eq!(wall.right_side, None);
+    assert_eq!(file, Some(texture.clone()), "saved inside the project");
+    // Put on again, it is drawn with the texture kept, not a new read of
+    // the same link: a kept one that stands up is drawn standing up.
+    let standing = newera_cloud::textures::derive(&{
+        let mut out = std::io::Cursor::new(Vec::new());
+        image::RgbImage::from_pixel(20, 40, image::Rgb([1, 2, 3]))
+            .write_to(&mut out, image::ImageFormat::Png)
+            .unwrap();
+        out.into_inner()
+    })
+    .unwrap();
+    sqlx::query("update product_assets set data = $1 where product_id = 'tile'")
+        .bind(&standing)
+        .execute(&state.db)
+        .await
+        .unwrap();
+    let again = tool(
+        &base,
+        &access,
+        "edit_finishes",
+        json!({"action": "assign", "surface": "w1:left", "product": "tile"}),
+    )
+    .await;
+    assert_eq!(again["isError"], false, "{again}");
+    let (wall, file) = stored_wall(&state, &project, "products/tile/finish.jpg").await;
+    assert_eq!(wall.left_side.and_then(|m| m.tile), Some([30.0, 60.0]));
+    assert_eq!(file, Some(standing));
+
+    let painted = tool(
+        &base,
+        &access,
+        "edit_finishes",
+        json!({"action": "assign", "surface": "w1:right", "product": "paint", "coats": 2}),
+    )
+    .await;
+    assert_eq!(painted["isError"], false, "{painted}");
+    let (wall, _) = stored_wall(&state, &project, "").await;
+    assert_eq!(
+        wall.right_side,
+        Some(newera_core::Material::paint([0xf2, 0xef, 0xe6]))
+    );
+
+    let given = tool(
+        &base,
+        &access,
+        "edit_finishes",
+        json!({"action": "assign", "surface": "w1:right", "product": "paint", "mat": "#102030"}),
+    )
+    .await;
+    assert_eq!(given["isError"], false, "{given}");
+    let (wall, _) = stored_wall(&state, &project, "").await;
+    assert_eq!(
+        wall.right_side,
+        Some(newera_core::Material::paint([0x10, 0x20, 0x30]))
+    );
+    let assets: i64 = sqlx::query_scalar("select count(*) from product_assets")
+        .fetch_one(&state.db)
+        .await
+        .unwrap();
+    assert_eq!(assets, 1, "one texture, made once, and none for the paint");
+}
+
+/// A band is a purchase only: the side's look stays. A finish with no
+/// sized swatch is drawn in its colour or not at all, and the agent is told
+/// what to set; a swatch link that gives no picture leaves the colour.
+#[tokio::test]
+async fn a_finish_without_a_sized_swatch_says_what_to_set() {
+    let Some((base, state)) = service().await else {
+        return;
+    };
+    let pictures = swatch_server().await;
+    state.links.allow_for_tests("127.0.0.1".parse().unwrap());
+    let (_, access, project) = drawn_project(&base, &state, "a@example.com").await;
+    stock_finishes(&state, "a@example.com", &format!("{pictures}/tile.png")).await;
+    let account = account_id(&state, "a@example.com").await;
+    stock(
+        &state,
+        &account,
+        "bare",
+        "https://www.praxis.nl/tegel/2",
+        "finish",
+        json!({"title": "Tegel", "finish_type": "covering", "pack_m2": 1.0}),
+    )
+    .await;
+    stock(
+        &state,
+        &account,
+        "grey",
+        "https://www.praxis.nl/tegel/3",
+        "finish",
+        json!({"title": "Tegel", "finish_type": "covering", "pack_m2": 1.0,
+               "colour_hex": "#808080", "swatch_image": format!("{pictures}/page.png"),
+               "tile_width_cm": 30.0, "tile_length_cm": 30.0}),
+    )
+    .await;
+    stock(
+        &state,
+        &account,
+        "paper",
+        "https://www.praxis.nl/behang/1",
+        "finish",
+        json!({"title": "Behang", "finish_type": "wallpaper", "colour_hex": "#eeebe1",
+               "swatch_image": format!("{pictures}/tile.png"),
+               "roll_width_cm": 53.0, "roll_length_m": 10.05}),
+    )
+    .await;
+    let assign = |args: Value| {
+        let (base, access) = (base.clone(), access.clone());
+        async move { tool(&base, &access, "edit_finishes", args).await }
+    };
+    let banded = assign(
+        json!({"action": "assign", "surface": "w1:left", "product": "tile",
+                               "band": [0, 120]}),
+    )
+    .await;
+    assert_eq!(
+        banded["content"][1]["text"],
+        "a band carries only the purchase: the side's look stays as it is (mat sets it, for the whole side)"
+    );
+    assert_eq!(stored_wall(&state, &project, "").await.0.left_side, None);
+
+    let bare = assign(json!({"action": "assign", "surface": "w1:right", "product": "bare"})).await;
+    assert_eq!(
+        bare["content"][1]["text"],
+        "bare has no look of its own, so the surface keeps the one it had: edit_products action=set fields swatch_image, tile_width_cm, tile_length_cm (swatch_image: a picture of one tile or plank, or of one wallpaper repeat across the roll, never of the pack or a room) gives it one, drawn once edit_finishes assigns it again"
+    );
+    assert_eq!(stored_wall(&state, &project, "").await.0.right_side, None);
+
+    let grey = assign(json!({"action": "assign", "surface": "w1:right", "product": "grey"})).await;
+    assert_eq!(
+        grey["content"][1]["text"],
+        format!(
+            "grey's swatch picture could not be used ({pictures}/page.png: not a picture the editor can read: The image format could not be determined), so it is drawn in its colour: edit_products action=set fields swatch_image gives it another"
+        )
+    );
+    assert_eq!(
+        stored_wall(&state, &project, "").await.0.right_side,
+        Some(newera_core::Material::paint([0x80, 0x80, 0x80]))
+    );
+
+    let paper =
+        assign(json!({"action": "assign", "surface": "w1:right", "product": "paper"})).await;
+    assert_eq!(
+        paper["content"][1]["text"],
+        "paper is drawn in its colour: edit_products action=set fields pattern_repeat_cm draws it as it looks, at its size, once edit_finishes assigns it again"
+    );
+    assert_eq!(
+        stored_wall(&state, &project, "").await.0.right_side,
+        Some(newera_core::Material::paint([0xee, 0xeb, 0xe1]))
+    );
+    stock(
+        &state,
+        &account,
+        "untyped",
+        "https://www.praxis.nl/tegel/4",
+        "finish",
+        json!({"title": "Tegel", "colour_hex": "#123456"}),
+    )
+    .await;
+    let untyped =
+        assign(json!({"action": "assign", "surface": "w1:right", "product": "untyped"})).await;
+    assert_eq!(
+        untyped["content"][1]["text"],
+        "untyped has no finish_type, which says what its look is made of, so it is drawn in its colour: edit_products action=set fields finish_type (covering, paint or wallpaper), then edit_finishes assign again"
+    );
+    assert_eq!(
+        stored_wall(&state, &project, "").await.0.right_side,
+        Some(newera_core::Material::paint([0x12, 0x34, 0x56]))
+    );
+    let assets: i64 = sqlx::query_scalar("select count(*) from product_assets")
+        .fetch_one(&state.db)
+        .await
+        .unwrap();
+    assert_eq!(assets, 0, "no texture without a picture and its size");
+}
+
+/// A new swatch is read when it is set — a link that gives no picture
+/// changes nothing — and replaces the texture in the open project, which
+/// is saved with it.
+#[tokio::test]
+async fn a_new_swatch_replaces_the_texture_where_it_is_drawn() {
+    let Some((base, state)) = service().await else {
+        return;
+    };
+    let pictures = swatch_server().await;
+    state.links.allow_for_tests("127.0.0.1".parse().unwrap());
+    let (_, access, project) = drawn_project(&base, &state, "a@example.com").await;
+    stock_finishes(&state, "a@example.com", &format!("{pictures}/tile.png")).await;
+    let assigned = tool(
+        &base,
+        &access,
+        "edit_finishes",
+        json!({"action": "assign", "surface": "w1:left", "product": "tile"}),
+    )
+    .await;
+    assert_eq!(assigned["isError"], false, "{assigned}");
+    let before = kept_texture(&state, "tile").await;
+    let page = format!("{pictures}/page.png");
+    assert_eq!(
+        tool(
+            &base,
+            &access,
+            "edit_products",
+            json!({"id": "tile", "action": "set", "fields": {"swatch_image": page}}),
+        )
+        .await,
+        refusal(&format!(
+            "nothing was changed: {page}: not a picture the editor can read: The image format could not be determined"
+        ))
+    );
+    assert_eq!(kept_texture(&state, "tile").await, before);
+    let shown = said_json(&tool(&base, &access, "products", json!({"id": "tile"})).await);
+    assert_eq!(
+        shown["fields"]["swatch_image"]["value"],
+        format!("{pictures}/tile.png"),
+        "the product is as it was"
+    );
+    let tall = format!("{pictures}/tall.png");
+    let set = said_json(
+        &tool(
+            &base,
+            &access,
+            "edit_products",
+            json!({"id": "tile", "action": "set", "fields": {"swatch_image": tall}}),
+        )
+        .await,
+    );
+    assert_eq!(set["fields"]["swatch_image"]["value"], tall);
+    assert_eq!(
+        set["drawn"],
+        "in the active project now, saved with it; any other project takes it the next time edit_finishes puts the product on a surface there"
+    );
+    assert_eq!(set["files"].as_array().map(Vec::len), Some(1), "{set}");
+    assert_eq!(set["files"][0][0], "texture");
+    let (texture, basis) = kept_texture(&state, "tile").await;
+    assert_eq!(basis, tall);
+    assert_eq!(
+        newera_cloud::textures::dimensions(&texture),
+        Some([200, 400])
+    );
+    let (wall, file) = stored_wall(&state, &project, "products/tile/finish.jpg").await;
+    assert_eq!(file, Some(texture), "the stored project holds the new one");
+    assert_eq!(
+        wall.left_side,
+        Some(newera_core::Material {
+            image: Some("products/tile/finish.jpg".into()),
+            tile: Some([30.0, 60.0]),
+            ..newera_core::Material::default()
+        }),
+        "the new picture stands up, so the tile on the wall does"
+    );
+    // The same link again is the texture kept: nothing read, nothing swapped.
+    let same = said_json(
+        &tool(
+            &base,
+            &access,
+            "edit_products",
+            json!({"id": "tile", "action": "set", "fields": {"swatch_image": tall}}),
+        )
+        .await,
+    );
+    assert_eq!(same.get("drawn"), None, "{same}");
+
+    let sized = said_json(
+        &tool(
+            &base,
+            &access,
+            "edit_products",
+            json!({"id": "tile", "action": "set", "fields": {"tile_width_cm": 20}}),
+        )
+        .await,
+    );
+    // The drawn size follows the product: a new size retiles the surfaces
+    // drawn with its picture, which stands up, 20 across and 60 up.
+    assert_eq!(
+        sized["drawn"],
+        "in the active project now, saved with it; any other project takes it the next time edit_finishes puts the product on a surface there"
+    );
+    let (wall, _) = stored_wall(&state, &project, "").await;
+    assert_eq!(wall.left_side.and_then(|m| m.tile), Some([20.0, 60.0]));
+}
+
+/// With the editor tab open, the texture reaches the tab before the call
+/// that draws with it, and a new swatch replaces it there.
+#[tokio::test]
+async fn a_finish_put_on_a_wall_in_the_tab_gets_its_texture_first() {
+    let Some((base, state)) = service().await else {
+        return;
+    };
+    let pictures = swatch_server().await;
+    state.links.allow_for_tests("127.0.0.1".parse().unwrap());
+    let (cookie, access, _) = credentials(&base, &state, "a@example.com").await;
+    stock_finishes(&state, "a@example.com", &format!("{pictures}/tile.png")).await;
+    let mut socket = claimed_tab(&base, &cookie).await;
+    let assigning = tokio::spawn({
+        let (base, access) = (base.clone(), access.clone());
+        async move {
+            tool(
+                &base,
+                &access,
+                "edit_finishes",
+                json!({"action": "assign", "surface": "w1:left", "product": "product:tile"}),
+            )
+            .await
+        }
+    });
+    let asset = to_tab(&mut socket).await;
+    assert_eq!(
+        [&asset["type"], &asset["path"], &asset["replace"]],
+        [
+            &json!("asset"),
+            &json!("products/tile/finish.jpg"),
+            &Value::Null
+        ]
+    );
+    let sent = base64::engine::general_purpose::STANDARD
+        .decode(asset["data"].as_str().unwrap())
+        .unwrap();
+    assert_eq!(sent, kept_texture(&state, "tile").await.0);
+    answer_tab(
+        &mut socket,
+        json!({"type": "result", "id": asset["id"], "ok": true,
+               "result": {"path": "products/tile/finish.jpg", "kept": true}}),
+    )
+    .await;
+    let call = to_tab(&mut socket).await;
+    assert_eq!(
+        [&call["type"], &call["name"], &call["args"]],
+        [
+            &json!("call"),
+            &json!("edit_finishes"),
+            &json!({"action": "assign", "surface": "w1:left", "product": "tile",
+                    "mat": "img:products/tile/finish.jpg 60x30"})
+        ]
+    );
+    answer_tab(
+        &mut socket,
+        json!({"type": "result", "id": call["id"], "ok": true,
+               "result": {"content": [{"type": "text", "text": "ok"}], "isError": false}}),
+    )
+    .await;
+    assert_eq!(assigning.await.unwrap()["isError"], false);
+    tab_left_alone(&mut socket).await;
+
+    let setting = tokio::spawn({
+        let (base, access, url) = (base.clone(), access.clone(), format!("{pictures}/tall.png"));
+        async move {
+            tool(
+                &base,
+                &access,
+                "edit_products",
+                json!({"id": "tile", "action": "set", "fields": {"swatch_image": url}}),
+            )
+            .await
+        }
+    });
+    let asset = to_tab(&mut socket).await;
+    assert_eq!(
+        [
+            &asset["type"],
+            &asset["path"],
+            &asset["replace"],
+            &asset["tile"]
+        ],
+        [
+            &json!("asset"),
+            &json!("products/tile/finish.jpg"),
+            &json!(true),
+            &json!([30.0, 60.0])
+        ],
+        "the new picture stands up: the surfaces drawn with it take 30×60"
+    );
+    let sent = base64::engine::general_purpose::STANDARD
+        .decode(asset["data"].as_str().unwrap())
+        .unwrap();
+    assert_eq!(newera_cloud::textures::dimensions(&sent), Some([200, 400]));
+    answer_tab(
+        &mut socket,
+        json!({"type": "result", "id": asset["id"], "ok": true,
+               "result": {"path": "products/tile/finish.jpg", "kept": true, "retiled": 1}}),
+    )
+    .await;
+    assert_eq!(
+        said_json(&setting.await.unwrap())["drawn"],
+        "in the open editor tab now; any other project takes it the next time edit_finishes puts the product on a surface there"
+    );
+    tab_left_alone(&mut socket).await;
+
+    // A new size goes the same way: the texture kept, with the size its
+    // surfaces take now.
+    let sizing = tokio::spawn({
+        let (base, access) = (base.clone(), access.clone());
+        async move {
+            tool(
+                &base,
+                &access,
+                "edit_products",
+                json!({"id": "tile", "action": "set", "fields": {"tile_length_cm": 90}}),
+            )
+            .await
+        }
+    });
+    let asset = to_tab(&mut socket).await;
+    assert_eq!(
+        [
+            &asset["type"],
+            &asset["path"],
+            &asset["replace"],
+            &asset["tile"]
+        ],
+        [
+            &json!("asset"),
+            &json!("products/tile/finish.jpg"),
+            &json!(true),
+            &json!([30.0, 90.0])
+        ]
+    );
+    let sent = base64::engine::general_purpose::STANDARD
+        .decode(asset["data"].as_str().unwrap())
+        .unwrap();
+    assert_eq!(sent, kept_texture(&state, "tile").await.0);
+    answer_tab(
+        &mut socket,
+        json!({"type": "result", "id": asset["id"], "ok": true,
+               "result": {"path": "products/tile/finish.jpg", "kept": true, "retiled": 1}}),
+    )
+    .await;
+    assert_eq!(
+        said_json(&sizing.await.unwrap())["drawn"],
+        "in the open editor tab now; any other project takes it the next time edit_finishes puts the product on a surface there"
+    );
+    tab_left_alone(&mut socket).await;
+    hang_up(&state, socket, "a@example.com").await;
+}
+
+/// A texture counts against the plan's storage beside the projects: one
+/// that does not fit is not kept, the call goes on without it, and the
+/// agent is told.
+#[tokio::test]
+async fn a_texture_over_the_plans_storage_is_not_kept() {
+    let Some((base, state)) = service().await else {
+        return;
+    };
+    let pictures = swatch_server().await;
+    state.links.allow_for_tests("127.0.0.1".parse().unwrap());
+    let (cookie, access, _) = drawn_project(&base, &state, "full@example.com").await;
+    stock_finishes(&state, "full@example.com", &format!("{pictures}/tile.png")).await;
+    sqlx::query(
+        r#"insert into plans (code, name, limits) values ('tiny', 'Tiny', '{"projects": 3, "storage_mb": 0, "draft_renders_per_day": 0, "hq_renders_per_month": 0}')"#,
+    )
+    .execute(&state.db)
+    .await
+    .unwrap();
+    sqlx::query("update accounts set given_plan = 'tiny' where email = 'full@example.com'")
+        .execute(&state.db)
+        .await
+        .unwrap();
+    // In the tab, where the project is not saved on the server by the call.
+    let mut socket = claimed_tab(&base, &cookie).await;
+    let assigning = tokio::spawn({
+        let (base, access) = (base.clone(), access.clone());
+        async move {
+            tool(
+                &base,
+                &access,
+                "edit_finishes",
+                json!({"action": "assign", "surface": "w1:left", "product": "tile"}),
+            )
+            .await
+        }
+    });
+    let call = to_tab(&mut socket).await;
+    assert_eq!(
+        [&call["type"], &call["args"]],
+        [
+            &json!("call"),
+            &json!({"action": "assign", "surface": "w1:left", "product": "tile"})
+        ],
+        "no file first, and no look"
+    );
+    answer_tab(
+        &mut socket,
+        json!({"type": "result", "id": call["id"], "ok": true,
+               "result": {"content": [{"type": "text", "text": "ok"}], "isError": false}}),
+    )
+    .await;
+    let assigned = assigning.await.unwrap();
+    assert_eq!(
+        assigned["content"][1]["text"],
+        "tile's texture was not kept (the Tiny plan stores 0 MB and this would take 0.1 MB), so it is drawn with the look the surface had: make room in the plan's storage (projects, products), then edit_finishes assign again",
+        "{assigned}"
+    );
+    let assets: i64 = sqlx::query_scalar("select count(*) from product_assets")
+        .fetch_one(&state.db)
+        .await
+        .unwrap();
+    assert_eq!(assets, 0);
+    tab_left_alone(&mut socket).await;
+    hang_up(&state, socket, "full@example.com").await;
+}
+
+/// A new swatch replaces the old texture in the plan's storage: the old
+/// one is not charged beside it. Near the limit, the new one still fits.
+#[tokio::test]
+async fn a_new_swatch_is_charged_in_place_of_the_old_one() {
+    let Some((base, state)) = service().await else {
+        return;
+    };
+    let pictures = swatch_server().await;
+    state.links.allow_for_tests("127.0.0.1".parse().unwrap());
+    let (_, access, _) = drawn_project(&base, &state, "a@example.com").await;
+    stock_finishes(&state, "a@example.com", &format!("{pictures}/tile.png")).await;
+    let assigned = tool(
+        &base,
+        &access,
+        "edit_finishes",
+        json!({"action": "assign", "surface": "w1:left", "product": "tile"}),
+    )
+    .await;
+    assert_eq!(assigned["isError"], false, "{assigned}");
+    sqlx::query(
+        r#"insert into plans (code, name, limits) values ('small', 'Small', '{"projects": 3, "storage_mb": 1, "draft_renders_per_day": 0, "hq_renders_per_month": 0}')"#,
+    )
+    .execute(&state.db)
+    .await
+    .unwrap();
+    sqlx::query("update accounts set given_plan = 'small' where email = 'a@example.com'")
+        .execute(&state.db)
+        .await
+        .unwrap();
+    // The texture kept now counts as all but 576 bytes of the plan: with it
+    // charged beside the new one, nothing would fit.
+    sqlx::query("update product_assets set size = 1048000 where kind = 'texture'")
+        .execute(&state.db)
+        .await
+        .unwrap();
+    let set = tool(
+        &base,
+        &access,
+        "edit_products",
+        json!({"id": "tile", "action": "set", "fields": {"swatch_image": format!("{pictures}/tall.png")}}),
+    )
+    .await;
+    assert_eq!(set["isError"], false, "{set}");
+    let (texture, _) = kept_texture(&state, "tile").await;
+    let size: i32 = sqlx::query_scalar("select size from product_assets where kind = 'texture'")
+        .fetch_one(&state.db)
+        .await
+        .unwrap();
+    assert_eq!(usize::try_from(size).unwrap(), texture.len());
+}
+
+/// A tab that kept a texture but did not say it resized the surfaces drawn
+/// with it — an editor older than the service, or one whose resize failed —
+/// is not told it worked: the answer says the surfaces keep their size and
+/// what to do.
+#[tokio::test]
+async fn a_tab_that_does_not_resize_the_surfaces_is_not_taken_at_its_word() {
+    let Some((base, state)) = service().await else {
+        return;
+    };
+    let pictures = swatch_server().await;
+    state.links.allow_for_tests("127.0.0.1".parse().unwrap());
+    let (cookie, access, _) = credentials(&base, &state, "a@example.com").await;
+    stock_finishes(&state, "a@example.com", &format!("{pictures}/tile.png")).await;
+    let mut socket = claimed_tab(&base, &cookie).await;
+    for (fields, result, drawn) in [
+        (
+            json!({"swatch_image": format!("{pictures}/tall.png")}),
+            json!({"path": "products/tile/finish.jpg", "kept": true}),
+            "the picture is replaced in the open editor tab, but the surfaces drawn with it keep their size (the tab did not resize them): reload the tab, then edit_finishes assign again; any other project takes it the next time edit_finishes puts the product on a surface there",
+        ),
+        (
+            json!({"tile_length_cm": 90}),
+            json!({"path": "products/tile/finish.jpg", "kept": true, "retiled": "w1 not found"}),
+            "the picture is replaced in the open editor tab, but the surfaces drawn with it keep their size (w1 not found): reload the tab, then edit_finishes assign again; any other project takes it the next time edit_finishes puts the product on a surface there",
+        ),
+    ] {
+        let setting = tokio::spawn({
+            let (base, access) = (base.clone(), access.clone());
+            async move {
+                tool(
+                    &base,
+                    &access,
+                    "edit_products",
+                    json!({"id": "tile", "action": "set", "fields": fields}),
+                )
+                .await
+            }
+        });
+        let asset = to_tab(&mut socket).await;
+        assert!(asset["tile"].is_array(), "{asset}");
+        answer_tab(
+            &mut socket,
+            json!({"type": "result", "id": asset["id"], "ok": true, "result": result}),
+        )
+        .await;
+        assert_eq!(said_json(&setting.await.unwrap())["drawn"], drawn);
+        tab_left_alone(&mut socket).await;
+    }
+    hang_up(&state, socket, "a@example.com").await;
 }

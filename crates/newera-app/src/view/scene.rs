@@ -319,8 +319,8 @@ struct Gpu {
     layout: wgpu::BindGroupLayout,
     sampler: wgpu::Sampler,
     bind_group: wgpu::BindGroup,
-    /// Image files currently uploaded, in layer order.
-    images: Vec<String>,
+    /// Image files currently uploaded, in layer order, each as it was then.
+    images: Vec<(String, newera_core::vfs::AssetRevision)>,
     mesh: Option<GpuMesh>,
     targets: Option<Targets>,
     texture_id: Option<egui::TextureId>,
@@ -341,9 +341,40 @@ pub(crate) fn sun_light(home: &Home, hour: f64) -> (Vec3, f32) {
     }
 }
 
-/// Revision, selection, cutaway, and which pieces with a lighter far file
-/// were drawn with it.
-type BuiltFor = (u64, Vec<ElementId>, Option<Cutaway>, Vec<bool>);
+/// Revision, selection, cutaway, which pieces with a lighter far file were
+/// drawn with it, and the revisions of the files the home draws with.
+type BuiltFor = (u64, Vec<ElementId>, Option<Cutaway>, Vec<bool>, u64);
+
+/// What the files `home` draws with are now: a file replaced under the
+/// same path — a shop product's model or texture swapped in by the hosted
+/// service — changes it, and the scene is built again.
+/// Each distinct file is looked at once, and no path is copied: this runs
+/// every frame.
+fn files_seen(home: &newera_core::Home, project: Option<&std::path::Path>) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut files = std::collections::BTreeSet::new();
+    home.for_each_asset(&mut |file| {
+        files.insert(file);
+    });
+    let mut hash = std::collections::hash_map::DefaultHasher::new();
+    for file in files {
+        newera_core::vfs::revision(&newera_core::resolve_asset(project, file)).hash(&mut hash);
+    }
+    hash.finish()
+}
+
+/// What the GPU mesh is built from now: when it differs from what it was
+/// built from, the scene is built again.
+fn built_for(
+    revision: u64,
+    selected: Vec<ElementId>,
+    cutaway: Option<Cutaway>,
+    far: Vec<bool>,
+    home: &newera_core::Home,
+    project: Option<&std::path::Path>,
+) -> BuiltFor {
+    (revision, selected, cutaway, far, files_seen(home, project))
+}
 
 pub(crate) struct SceneView {
     camera: OrbitCamera,
@@ -483,11 +514,13 @@ impl SceneView {
                 Some(lod.file_at(Some(distance(piece))).is_some())
             })
             .collect();
-        let key = (
+        let key = built_for(
             revision,
             selection.iter().copied().collect::<Vec<_>>(),
             cutaway,
             far,
+            home,
+            project,
         );
         if self.built_for.as_ref() != Some(&key) {
             // The same cache as photos: a file replaced under the same path
@@ -840,15 +873,23 @@ impl Gpu {
         })
     }
 
-    /// Uploads material images when the set of files changed. Unreadable
-    /// files become a neutral gray layer so the rest still renders.
+    /// Uploads material images when the set of files, or one of them,
+    /// changed. Unreadable files become a neutral gray layer so the rest
+    /// still renders.
     fn upload_images(
         &mut self,
         rs: &RenderState,
         images: &[String],
         project: Option<&std::path::Path>,
     ) {
-        if self.images == images {
+        let seen: Vec<(String, newera_core::vfs::AssetRevision)> = images
+            .iter()
+            .map(|file| {
+                let path = newera_core::resolve_asset(project, file);
+                (file.clone(), newera_core::vfs::revision(&path))
+            })
+            .collect();
+        if self.images == seen {
             return;
         }
         let decoded: Vec<image::RgbaImage> = images
@@ -888,7 +929,7 @@ impl Gpu {
             Some(&rs.queue),
             &decoded,
         );
-        self.images = images.to_vec();
+        self.images = seen;
     }
 
     fn upload_mesh(&mut self, rs: &RenderState, mesh: &Mesh) {
@@ -1131,5 +1172,46 @@ mod tests {
         home.compass.north_degrees = 180.0;
         let (turned, _) = sun_light(&home, 8.0);
         assert!(turned.x < -0.5, "{turned}");
+    }
+
+    /// A file swapped under the same path — a shop product's texture or
+    /// model replaced by the hosted service — makes the scene build again;
+    /// the same bytes do not.
+    #[test]
+    fn a_file_replaced_under_its_path_rebuilds_the_scene() {
+        let dir = std::path::PathBuf::from("/memory/scene-files-seen-test");
+        let mut home = newera_core::Home::default();
+        let id = home.new_wall_id();
+        let mut wall = newera_core::Wall::new(
+            id,
+            newera_core::Point2::new(0.0, 0.0),
+            newera_core::Point2::new(400.0, 0.0),
+        );
+        wall.left_side = Some(newera_core::Material {
+            image: Some("products/p1/finish.jpg".into()),
+            tile: Some([30.0, 60.0]),
+            ..newera_core::Material::default()
+        });
+        wall.right_side = Some(newera_core::Material {
+            image: Some("products/p2/finish.jpg".into()),
+            ..newera_core::Material::default()
+        });
+        home.walls.push(wall);
+        // The second of the files the home draws with is the one replaced.
+        let path = "products/p2/finish.jpg".to_owned();
+        newera_core::vfs::mount(
+            &dir,
+            [
+                ("products/p1/finish.jpg".to_owned(), vec![9]),
+                (path.clone(), vec![1, 2, 3]),
+            ],
+        );
+        let key = || built_for(7, Vec::new(), None, Vec::new(), &home, Some(&dir));
+        let first = key();
+        newera_core::vfs::mount(&dir, [(path.clone(), vec![1, 2, 3])]);
+        assert_eq!(key(), first);
+        newera_core::vfs::mount(&dir, [(path, vec![4, 5, 6])]);
+        assert_ne!(key(), first);
+        newera_core::vfs::unmount(&dir);
     }
 }

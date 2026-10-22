@@ -203,13 +203,8 @@ async fn answer(
             // Shop products the call names are made ready first: checked
             // against the account's library, their files fetched, the call
             // rewritten to what the editor reads (`crate::staging`).
-            let (args, files, notes) = match crate::staging::stage(
-                &app.db,
-                &account.id,
-                name,
-                &args,
-            )
-            .await
+            let (args, files, notes) = match crate::staging::stage(app, &account.id, name, &args)
+                .await
             {
                 Ok(Ok(Some(staged))) => (staged.args, staged.files, staged.notes),
                 Ok(Ok(None)) => (args, Vec::new(), Vec::new()),

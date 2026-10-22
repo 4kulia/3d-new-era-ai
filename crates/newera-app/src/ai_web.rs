@@ -714,11 +714,21 @@ fn hold(
                         })
                     };
                     let reply = match kept {
-                        Ok(result) => {
+                        Ok(mut result) => {
                             // A model replaced under pieces drawn with it:
                             // they redraw, and the service gets the file
-                            // with the next save.
+                            // with the next save. A finish's texture also
+                            // gives the surfaces drawn with it its size.
                             if message["replace"] == true && result["kept"] == true {
+                                if message.get("tile").is_some() {
+                                    result["retiled"] = match crate::staged_asset::retile(
+                                        &mut document.write(),
+                                        &message,
+                                    ) {
+                                        Ok(changed) => serde_json::json!(changed),
+                                        Err(why) => serde_json::json!(why),
+                                    };
+                                }
                                 if let Some(cloud) = state.borrow_mut().cloud.as_mut() {
                                     cloud.saver.files_changed();
                                 }

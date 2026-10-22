@@ -104,8 +104,9 @@ pub async fn store(
 }
 
 /// The bytes an account keeps, which its plan's storage holds: its
-/// projects but `except_project`, and its products' files but the model of
-/// `except_model` (one about to be replaced).
+/// projects but `except_project`, and its products' files but
+/// `except_file` — a product's file of a kind (`model`, `texture`) about
+/// to be replaced.
 ///
 /// # Errors
 ///
@@ -114,7 +115,7 @@ pub async fn kept_bytes(
     db: &PgPool,
     account: &str,
     except_project: Option<&str>,
-    except_model: Option<&str>,
+    except_file: Option<(&str, &str)>,
 ) -> sqlx::Result<i64> {
     sqlx::query_scalar(
         "select ((select coalesce(sum(size), 0) from projects
@@ -122,11 +123,13 @@ pub async fn kept_bytes(
               + (select coalesce(sum(a.size), 0) from product_assets a
                  join products p on p.id = a.product_id
                  where p.account_id = $1
-                   and not (a.kind = 'model' and a.product_id is not distinct from $3)))::bigint",
+                   and not (a.product_id is not distinct from $3
+                            and a.kind is not distinct from $4)))::bigint",
     )
     .bind(account)
     .bind(except_project)
-    .bind(except_model)
+    .bind(except_file.map(|(product, _)| product))
+    .bind(except_file.map(|(_, kind)| kind))
     .fetch_one(db)
     .await
 }
@@ -145,12 +148,14 @@ pub fn storage_limit(plan: &Plan) -> i64 {
 #[must_use]
 pub fn no_room(plan: &Plan, total: i64) -> Option<String> {
     let limit = storage_limit(plan);
+    // Rounded up to the tenth: a size under a MB is never said as none.
+    #[allow(clippy::cast_precision_loss)] // bytes far below 2^52
+    let tenths = (total as f64 / (1024.0 * 1024.0) * 10.0).ceil() / 10.0;
     (total > limit).then(|| {
         format!(
-            "the {} plan stores {} MB and this would take {} MB",
+            "the {} plan stores {} MB and this would take {tenths:.1} MB",
             plan.name,
             limit / 1024 / 1024,
-            total / 1024 / 1024
         )
     })
 }
@@ -821,7 +826,8 @@ impl Engine {
     /// Puts `bytes` at `path` among the files of the account's copy open
     /// now, when that copy draws something with the file, and saves the
     /// project with it: a product's model attached after it was placed with
-    /// a placeholder. False when no copy is open, none of it uses the file,
+    /// a placeholder, or a finish's new texture — with `tile`, the size the
+    /// surfaces drawn with it take, in every variant (`newera_core::finishes::retile`). False when no copy is open, none of it uses the file,
     /// or the project changed meanwhile (it then takes the file the next
     /// time the product is placed there).
     ///
@@ -839,6 +845,7 @@ impl Engine {
         plan: &Plan,
         path: &str,
         bytes: &[u8],
+        tile: Option<[f64; 2]>,
     ) -> anyhow::Result<bool> {
         let Some(loaded) = self.loaded.lock().expect("loaded").get(account).cloned() else {
             return Ok(false);
@@ -852,6 +859,10 @@ impl Engine {
             return Ok(false);
         }
         put_files(&loaded, &[(path.to_owned(), bytes.to_vec())]).await?;
+        if let Some(tile) = tile {
+            newera_core::finishes::retile(&mut loaded.doc.write(), path, tile)
+                .map_err(|e| anyhow::anyhow!("{e}"))?;
+        }
         Ok(self.save(db, account, plan, &loaded).await?.is_none())
     }
 
@@ -1039,6 +1050,31 @@ pub(crate) async fn keep_file(
 
 #[cfg(test)]
 mod tests {
+    /// What a refusal says it would take is never rounded down to nothing:
+    /// a tenth of a MB, rounded up.
+    #[test]
+    fn a_full_plan_says_what_it_would_take_to_the_tenth() {
+        let plan = |mb: i64| crate::accounts::Plan {
+            code: "tiny".into(),
+            name: "Tiny".into(),
+            limits: serde_json::json!({"storage_mb": mb}),
+        };
+        let mb = 1024 * 1024;
+        assert_eq!(
+            super::no_room(&plan(0), 1),
+            Some("the Tiny plan stores 0 MB and this would take 0.1 MB".to_owned())
+        );
+        assert_eq!(
+            super::no_room(&plan(1), mb + 1),
+            Some("the Tiny plan stores 1 MB and this would take 1.1 MB".to_owned())
+        );
+        assert_eq!(
+            super::no_room(&plan(1), mb * 3 / 2),
+            Some("the Tiny plan stores 1 MB and this would take 1.5 MB".to_owned())
+        );
+        assert_eq!(super::no_room(&plan(1), mb), None);
+    }
+
     #[test]
     fn a_copy_takes_its_directory_with_it() {
         let dir = std::env::temp_dir().join(format!("engine-drop-{}", super::secret::id()));

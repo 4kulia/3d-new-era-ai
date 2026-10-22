@@ -494,3 +494,94 @@ fn progress_window() {
     });
     hold.store(false, Ordering::Relaxed);
 }
+
+/// A shop finish's texture replaced under the same path — the hosted
+/// service swapping in a new swatch — shows in the open 3D view without an
+/// edit: red tiles first, blue ones after. Writes both screenshots.
+#[test]
+#[ignore = "visual review; needs a GPU"]
+fn swapped_finish_texture() {
+    use newera_core::{Element, Material};
+    let picture = |rgb: [u8; 3]| {
+        let mut out = std::io::Cursor::new(Vec::new());
+        image::RgbImage::from_fn(64, 32, |x, y| {
+            if (x < 32) == (y < 16) {
+                image::Rgb(rgb)
+            } else {
+                image::Rgb([240, 240, 240])
+            }
+        })
+        .write_to(&mut out, image::ImageFormat::Jpeg)
+        .unwrap();
+        out.into_inner()
+    };
+    let dir = std::path::PathBuf::from("/memory/swapped-finish-texture");
+    let path = "products/p1/finish.jpg";
+    newera_core::vfs::mount(&dir, [(path.to_owned(), picture([200, 30, 30]))]);
+    let mut doc = Document::default();
+    house(&mut doc, 700.0);
+    doc.set_asset_dir(Some(dir.clone()));
+    let mut home = doc.home().clone();
+    for wall in &mut home.walls {
+        let look = Material {
+            image: Some(path.to_owned()),
+            tile: Some([60.0, 30.0]),
+            ..Material::default()
+        };
+        wall.left_side = Some(look.clone());
+        wall.right_side = Some(look);
+    }
+    let commands = home
+        .walls
+        .iter()
+        .cloned()
+        .map(Element::Wall)
+        .map(|element| Command::Update { element })
+        .collect();
+    doc.execute(Command::Batch { commands }).unwrap();
+    let mut harness = Harness::builder()
+        .with_size(eframe::egui::vec2(1400.0, 860.0))
+        .with_step_dt(1.0 / 60.0)
+        .wgpu()
+        .build_eframe(move |cc| NewEraApp::new(cc, SharedDocument::new(doc), None));
+    harness.run_steps(17);
+    let before = harness.render().expect("render");
+    newera_core::vfs::mount(&dir, [(path.to_owned(), picture([30, 30, 200]))]);
+    harness.run_steps(12);
+    let after = harness.render().expect("render");
+    let shots = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/screenshots");
+    std::fs::create_dir_all(&shots).unwrap();
+    before
+        .save(shots.join("swapped-finish-texture-before.png"))
+        .unwrap();
+    after
+        .save(shots.join("swapped-finish-texture-after.png"))
+        .unwrap();
+    newera_core::vfs::unmount(&dir);
+    // The 3D view, below the plan and left of its axes.
+    let count = |image: &image::RgbaImage, red: bool| {
+        image::imageops::crop_imm(image, 280, 480, 1000, 340)
+            .to_image()
+            .pixels()
+            .filter(|p| {
+                let [r, g, b, _] = p.0;
+                let (hot, cold) = if red { (r, b.max(g)) } else { (b, r.max(g)) };
+                i32::from(hot) - i32::from(cold) > 80
+            })
+            .count()
+    };
+    let counts = [
+        count(&before, true),
+        count(&before, false),
+        count(&after, true),
+        count(&after, false),
+    ];
+    assert!(
+        counts[0] > 1000 && counts[1] < 10,
+        "red tiles first: {counts:?}"
+    );
+    assert!(
+        counts[3] > 1000 && counts[2] < 10,
+        "blue ones after: {counts:?}"
+    );
+}

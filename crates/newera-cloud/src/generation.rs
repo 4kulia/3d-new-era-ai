@@ -500,8 +500,13 @@ async fn finish(app: &AppState, job: &Open, bytes: Vec<u8>) -> anyhow::Result<()
         .await;
     }
     let plan = crate::accounts::plan_of(&app.db, &job.account_id).await?;
-    let kept =
-        crate::engine::kept_bytes(&app.db, &job.account_id, None, Some(&job.product_id)).await?;
+    let kept = crate::engine::kept_bytes(
+        &app.db,
+        &job.account_id,
+        None,
+        Some((&job.product_id, "model")),
+    )
+    .await?;
     let size = i64::try_from(bytes.len()).unwrap_or(i64::MAX);
     if let Some(why) = crate::engine::no_room(&plan, kept.saturating_add(size)) {
         return fail(&app.db, job, &format!("the model was not kept: {why}")).await;

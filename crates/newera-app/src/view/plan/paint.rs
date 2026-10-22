@@ -24,10 +24,12 @@ fn size_px(camera: &Camera, size: Size) -> f32 {
     }
 }
 
-/// Background images uploaded to the GPU, keyed by resolved path.
+/// Background images uploaded to the GPU, keyed by resolved path, each
+/// with the revision of the file it was read from: a file replaced under
+/// the same path is read again.
 #[derive(Default)]
 pub(crate) struct Textures {
-    loaded: HashMap<String, Option<TextureHandle>>,
+    loaded: HashMap<String, (newera_core::vfs::AssetRevision, Option<TextureHandle>)>,
 }
 
 impl std::fmt::Debug for Textures {
@@ -71,16 +73,25 @@ impl Textures {
     ) -> Option<&TextureHandle> {
         let resolved = resolve_asset(project, path);
         let key = format!("{}#{:?}", resolved.display(), options.wrap_mode);
+        let now = newera_core::vfs::revision(&resolved);
+        if self.loaded.get(&key).is_some_and(|(seen, _)| *seen != now) {
+            self.loaded.remove(&key);
+        }
         self.loaded
             .entry(key.clone())
             .or_insert_with(|| {
-                let image = newera_core::images::decode(&newera_core::vfs::read(&resolved).ok()?)
-                    .ok()?
-                    .to_rgba8();
-                let size = [image.width() as usize, image.height() as usize];
-                let pixels = egui::ColorImage::from_rgba_unmultiplied(size, image.as_raw());
-                Some(ctx.load_texture(key, pixels, options))
+                let texture = (|| {
+                    let image =
+                        newera_core::images::decode(&newera_core::vfs::read(&resolved).ok()?)
+                            .ok()?
+                            .to_rgba8();
+                    let size = [image.width() as usize, image.height() as usize];
+                    let pixels = egui::ColorImage::from_rgba_unmultiplied(size, image.as_raw());
+                    Some(ctx.load_texture(key, pixels, options))
+                })();
+                (now, texture)
             })
+            .1
             .as_ref()
     }
 }
@@ -414,4 +425,36 @@ pub(crate) fn paint_rulers(
         FontId::monospace(8.0),
         ink,
     );
+}
+
+#[cfg(test)]
+mod tests {
+    /// A tiled floor image replaced under the same path is read again; the
+    /// same file is not.
+    #[test]
+    fn a_texture_replaced_under_its_path_is_read_again() {
+        let png = |rgb: [u8; 3]| {
+            let mut out = std::io::Cursor::new(Vec::new());
+            image::RgbaImage::from_pixel(2, 2, image::Rgba([rgb[0], rgb[1], rgb[2], 255]))
+                .write_to(&mut out, image::ImageFormat::Png)
+                .unwrap();
+            out.into_inner()
+        };
+        let dir = std::path::PathBuf::from("/memory/plan-textures-test");
+        let path = "products/p1/finish.jpg";
+        let ctx = eframe::egui::Context::default();
+        let mut textures = super::Textures::default();
+        newera_core::vfs::mount(&dir, [(path.to_owned(), png([200, 30, 30]))]);
+        let first = textures.get_tiled(&ctx, Some(&dir), path).unwrap().id();
+        assert_eq!(
+            textures.get_tiled(&ctx, Some(&dir), path).unwrap().id(),
+            first
+        );
+        newera_core::vfs::mount(&dir, [(path.to_owned(), png([30, 30, 200]))]);
+        assert_ne!(
+            textures.get_tiled(&ctx, Some(&dir), path).unwrap().id(),
+            first
+        );
+        newera_core::vfs::unmount(&dir);
+    }
 }

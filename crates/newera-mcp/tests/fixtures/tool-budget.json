@@ -1,5 +1,5 @@
 {
-  "total": 136170,
+  "total": 136403,
   "tools": {
     "accept": {
       "total": 1360,
@@ -104,9 +104,9 @@
       "output": 221
     },
     "edit_finishes": {
-      "total": 1714,
+      "total": 1809,
       "description": 331,
-      "input": 956,
+      "input": 1051,
       "output": 203
     },
     "edit_history": {
@@ -152,8 +152,8 @@
       "output": 592
     },
     "edit_products": {
-      "total": 2225,
-      "description": 718,
+      "total": 2363,
+      "description": 856,
       "input": 826,
       "output": 466
     },

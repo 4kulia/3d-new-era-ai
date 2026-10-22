@@ -253,6 +253,79 @@ pub fn copied(home: &Home, from: WallId, to: WallId, flip: bool) -> Vec<crate::C
     onto(&of_wall(home, from), to, flip)
 }
 
+/// The commands that draw every floor, ceiling and wall side whose look is
+/// the image `image` at `tile` cm — a shop finish's texture whose new
+/// picture lies the other way — leaving the rest of each look as it is.
+/// None when no surface draws with it, or each already has that size.
+#[must_use]
+pub fn retiled(home: &Home, image: &str, tile: [f64; 2]) -> Vec<crate::Command> {
+    let stale = |m: &Option<crate::Material>| {
+        m.as_ref()
+            .is_some_and(|m| m.image.as_deref() == Some(image) && m.tile != Some(tile))
+    };
+    let set = |m: &mut Option<crate::Material>| {
+        if stale(m)
+            && let Some(m) = m
+        {
+            m.tile = Some(tile);
+        }
+    };
+    let walls = home
+        .walls
+        .iter()
+        .filter(|w| stale(&w.left_side) || stale(&w.right_side))
+        .map(|wall| {
+            let mut wall = wall.clone();
+            set(&mut wall.left_side);
+            set(&mut wall.right_side);
+            crate::Command::update(wall)
+        });
+    let rooms = home
+        .rooms
+        .iter()
+        .filter(|r| stale(&r.floor_material) || stale(&r.ceiling_material))
+        .map(|room| {
+            let mut room = room.clone();
+            set(&mut room.floor_material);
+            set(&mut room.ceiling_material);
+            crate::Command::update(room)
+        });
+    walls.chain(rooms).collect()
+}
+
+/// Draws `image` at `tile` cm on every surface of every variant of `doc`
+/// whose look is that image ([`retiled`]): each variant's change is one
+/// step of its own history, and the open variant stays open. Answers how
+/// many elements changed.
+///
+/// # Errors
+///
+/// When a variant refuses the change; the variants before it keep theirs.
+pub fn retile(doc: &mut crate::Document, image: &str, tile: [f64; 2]) -> CoreResult<usize> {
+    let open = doc.active_variant();
+    let mut changed = 0;
+    let mut outcome = Ok(());
+    for index in 0..doc.variant_count() {
+        let commands = doc
+            .variants()
+            .nth(index)
+            .map(|v| retiled(v.home(), image, tile))
+            .unwrap_or_default();
+        if commands.is_empty() {
+            continue;
+        }
+        changed += commands.len();
+        outcome = doc
+            .switch_variant(index)
+            .and_then(|()| doc.execute(crate::Command::Batch { commands }));
+        if outcome.is_err() {
+            break;
+        }
+    }
+    doc.switch_variant(open)?;
+    outcome.map(|()| changed)
+}
+
 /// Puts `assignment` in `home` at `index` (the end when `None`), replacing
 /// the one on the same surface and band. Returns the command that undoes it.
 pub(crate) fn assign(
@@ -749,6 +822,134 @@ mod tests {
                 index: None,
             }]
         );
+    }
+
+    /// A texture whose new picture lies the other way: every surface drawn
+    /// with it takes the new size, the rest of each look kept; other
+    /// surfaces are left alone.
+    #[test]
+    fn surfaces_drawn_with_a_texture_take_its_new_size() {
+        let mut doc = home();
+        let tiled = |tile: [f64; 2], angle: f64| crate::Material {
+            image: Some("products/p1/finish.jpg".into()),
+            tile: Some(tile),
+            angle,
+            ..crate::Material::default()
+        };
+        let mut wall = doc.home().walls[0].clone();
+        wall.left_side = Some(tiled([60.0, 30.0], 45.0));
+        wall.right_side = Some(tiled([60.0, 30.0], 0.0));
+        let mut room = doc.home().rooms[0].clone();
+        room.floor_material = Some(crate::Material {
+            image: Some("other.jpg".into()),
+            tile: Some([60.0, 30.0]),
+            ..crate::Material::default()
+        });
+        room.ceiling_material = Some(tiled([60.0, 30.0], 0.0));
+        doc.execute(Command::Batch {
+            commands: vec![Command::update(wall.clone()), Command::update(room.clone())],
+        })
+        .unwrap();
+        let before = doc.home().clone();
+        let commands = retiled(doc.home(), "products/p1/finish.jpg", [30.0, 60.0]);
+        assert_eq!(commands.len(), 2);
+        doc.execute(Command::Batch { commands }).unwrap();
+        let home = doc.home();
+        assert_eq!(home.walls[0].left_side, Some(tiled([30.0, 60.0], 45.0)));
+        assert_eq!(home.walls[0].right_side, Some(tiled([30.0, 60.0], 0.0)));
+        assert_eq!(home.rooms[0].floor_material, room.floor_material);
+        assert_eq!(
+            home.rooms[0].ceiling_material,
+            Some(tiled([30.0, 60.0], 0.0))
+        );
+        // A paint is no image, and is left alone.
+        let mut painted = home.walls[0].clone();
+        painted.right_side = Some(crate::Material::paint([1, 2, 3]));
+        doc.execute(Command::update(painted.clone())).unwrap();
+        assert_eq!(
+            retiled(doc.home(), "products/p1/finish.jpg", [60.0, 30.0]),
+            vec![
+                Command::update({
+                    let mut back = painted.clone();
+                    back.left_side = Some(tiled([60.0, 30.0], 45.0));
+                    back
+                }),
+                Command::update(room.clone()),
+            ]
+        );
+        doc.undo().unwrap();
+        assert_eq!(
+            retiled(doc.home(), "products/p1/finish.jpg", [30.0, 60.0]),
+            vec![],
+            "nothing left to change"
+        );
+        doc.undo().unwrap();
+        assert_eq!(doc.home(), &before);
+        // A floor drawn with it takes the size too.
+        let mut floored = doc.home().rooms[0].clone();
+        floored.floor_material = Some(tiled([60.0, 30.0], 0.0));
+        floored.ceiling_material = None;
+        doc.execute(Command::update(floored.clone())).unwrap();
+        let commands = retiled(doc.home(), "products/p1/finish.jpg", [30.0, 60.0]);
+        assert_eq!(
+            commands.last(),
+            Some(&Command::update({
+                let mut done = floored.clone();
+                done.floor_material = Some(tiled([30.0, 60.0], 0.0));
+                done
+            }))
+        );
+    }
+
+    /// Every variant of the project draws a texture at its new size, each
+    /// change in that variant's own history; the open variant stays open.
+    #[test]
+    fn every_variant_drawn_with_a_texture_takes_its_new_size() {
+        let mut doc = home();
+        let look = |tile: [f64; 2]| {
+            Some(crate::Material {
+                image: Some("products/p1/finish.jpg".into()),
+                tile: Some(tile),
+                ..crate::Material::default()
+            })
+        };
+        let mut wall = doc.home().walls[0].clone();
+        wall.left_side = look([60.0, 30.0]);
+        doc.execute(Command::update(wall)).unwrap();
+        doc.add_variant(None, true);
+        let mut room = doc.home().rooms[0].clone();
+        room.floor_material = look([60.0, 30.0]);
+        doc.execute(Command::update(room)).unwrap();
+        doc.switch_variant(0).unwrap();
+        assert_eq!(
+            retile(&mut doc, "products/p1/finish.jpg", [30.0, 60.0]),
+            Ok(3)
+        );
+        assert_eq!(doc.active_variant(), 0);
+        let drawn: Vec<_> = doc
+            .variants()
+            .map(|v| {
+                (
+                    v.home().walls[0].left_side.clone(),
+                    v.home().rooms[0].floor_material.clone(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            drawn,
+            vec![
+                (look([30.0, 60.0]), None),
+                (look([30.0, 60.0]), look([30.0, 60.0])),
+            ]
+        );
+        assert_eq!(
+            retile(&mut doc, "products/p1/finish.jpg", [30.0, 60.0]),
+            Ok(0)
+        );
+        doc.switch_variant(1).unwrap();
+        doc.undo().unwrap();
+        assert_eq!(doc.home().walls[0].left_side, look([60.0, 30.0]));
+        assert_eq!(doc.home().rooms[0].floor_material, look([60.0, 30.0]));
     }
 
     #[test]

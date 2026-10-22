@@ -208,7 +208,7 @@ async fn shown(db: &PgPool, row: &Row) -> sqlx::Result<Value> {
     });
     let files: Vec<(String, String, Option<String>, i32, i64)> = sqlx::query_as(
         "select kind, source, generator, size, extract(epoch from created_at)::bigint
-         from product_assets where product_id = $1 and kind = 'model'",
+         from product_assets where product_id = $1 order by kind",
     )
     .bind(&row.id)
     .fetch_all(db)
@@ -468,7 +468,7 @@ async fn edit(app: &AppState, account: &str, args: &Value) -> anyhow::Result<Val
                 .await?;
             Ok(said(&json!({"id": id, "removed": true})))
         }
-        "set" => set(&app.db, row, args).await,
+        "set" => set(app, account, row, args).await,
         "attach_model" => attach_model(app, account, &row, args).await,
         "generate" => generate(app, account, &row).await,
         _ => refresh(app, account, row).await,
@@ -506,7 +506,7 @@ async fn attach_model(
         Err(why) => return Ok(refused(why)),
     };
     let plan = crate::accounts::plan_of(&app.db, account).await?;
-    let kept = crate::engine::kept_bytes(&app.db, account, None, Some(&row.id)).await?;
+    let kept = crate::engine::kept_bytes(&app.db, account, None, Some((&row.id, "model"))).await?;
     let size = i64::try_from(bytes.len()).unwrap_or(i64::MAX);
     if let Some(why) = crate::engine::no_room(&plan, kept.saturating_add(size)) {
         return Ok(refused(format!("the model was not kept: {why}")));
@@ -558,9 +558,21 @@ async fn generate(app: &AppState, account: &str, row: &Row) -> anyhow::Result<Va
     Ok(said(&shown(&app.db, row).await?))
 }
 
+/// The fields that size a finish's swatch picture.
+const SWATCH_SIZES: &[&str] = &[
+    "tile_width_cm",
+    "tile_length_cm",
+    "roll_width_cm",
+    "pattern_repeat_cm",
+];
+
 /// Fills or corrects fields as the agent's; `kind` changes what the
-/// product is.
-async fn set(db: &PgPool, row: Row, args: &Value) -> anyhow::Result<Value> {
+/// product is. A finish's new swatch picture is read first — a link that
+/// gives none changes nothing — and replaces its texture where it is drawn
+/// already; a new picture or a new size gives the surfaces drawn with it
+/// the size they take now (`drawn`).
+async fn set(app: &AppState, account: &str, row: Row, args: &Value) -> anyhow::Result<Value> {
+    let db = &app.db;
     let Some(given) = args["fields"].as_object().filter(|f| !f.is_empty()) else {
         return Ok(refused(
             "edit_products action=set: fields is an object of field → value, e.g. {\"price\": \"24.54\"}",
@@ -589,6 +601,51 @@ async fn set(db: &PgPool, row: Row, args: &Value) -> anyhow::Result<Value> {
             },
         );
     }
+    // The texture is made before anything is kept, so a link that gives no
+    // picture is refused with nothing changed. The size its surfaces are
+    // drawn at always follows the product: a new picture, which may lie the
+    // other way, or a new size, retiles them where they are drawn.
+    let mut drawn = None;
+    if kind == Kind::Finish {
+        let swatch = fields
+            .get("swatch_image")
+            .and_then(|f| f.value.as_str())
+            .map(str::to_owned);
+        let had = crate::textures::basis(db, &row.id).await?;
+        let new_swatch = given.contains_key("swatch_image")
+            && swatch.is_some()
+            && had.as_ref().map(Option::as_deref) != Some(swatch.as_deref());
+        let resized = SWATCH_SIZES.iter().any(|name| given.contains_key(*name));
+        let plan = crate::accounts::plan_of(db, account).await?;
+        let texture = match swatch.as_deref() {
+            Some(url) if new_swatch => {
+                match crate::textures::for_swatch(db, &app.links, account, &plan, &row.id, url)
+                    .await?
+                {
+                    Ok(bytes) => Some(bytes),
+                    Err(why) => return Ok(refused(format!("nothing was changed: {why}"))),
+                }
+            }
+            Some(_) if resized => crate::textures::kept(db, &row.id)
+                .await?
+                .map(|(bytes, _)| bytes),
+            _ => None,
+        };
+        if let Some(bytes) = texture {
+            let tile = match newera_shop::look::appearance(&fields).look {
+                Some(newera_shop::look::Look::Picture { url, size, hangs })
+                    if Some(&url) == swatch.as_ref() =>
+                {
+                    crate::textures::dimensions(&bytes)
+                        .map(|px| crate::textures::drawn_size(size, hangs, px))
+                }
+                _ => None,
+            };
+            drawn = Some(
+                crate::staging::swap_texture(app, account, &plan, &row.id, &bytes, tile).await?,
+            );
+        }
+    }
     sqlx::query("update products set fields = $2, kind = $3, updated_at = now() where id = $1")
         .bind(&row.id)
         .bind(Json(&fields))
@@ -603,7 +660,11 @@ async fn set(db: &PgPool, row: Row, args: &Value) -> anyhow::Result<Value> {
         kind: kind.as_str().to_owned(),
         ..row
     };
-    Ok(said(&shown(db, &row).await?))
+    let mut answer = shown(db, &row).await?;
+    if let Some(drawn) = drawn {
+        answer["drawn"] = json!(drawn);
+    }
+    Ok(said(&answer))
 }
 
 /// What a refresh takes from the shop: the commercial fields. The rest of

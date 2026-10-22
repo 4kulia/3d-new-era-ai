@@ -114,12 +114,18 @@ enum ToTab {
     /// `replace`: the file replaces one already placed (a model attached
     /// later); the tab keeps it only when its document uses that path, and
     /// says whether it did (`{"path", "kept"}`).
+    ///
+    /// `tile`: the file is a shop finish's texture, drawn `[across, up]` cm:
+    /// every surface whose look is that file takes that size, as its new
+    /// picture may lie the other way (`{"path", "kept", "retiled"}`).
     Asset {
         id: u64,
         path: String,
         data: String,
         #[serde(skip_serializing_if = "std::ops::Not::not")]
         replace: bool,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        tile: Option<[f64; 2]>,
     },
 }
 
@@ -861,12 +867,13 @@ pub async fn stage_in(
     bytes: &[u8],
     within: Duration,
 ) -> Result<Value, String> {
-    send_file(rooms, room, path, bytes, within, false).await
+    send_file(rooms, room, path, bytes, within, false, None).await
 }
 
 /// Hands the account's tab a file that replaces one already placed — kept
 /// only when its document uses `path` — and waits up to `within` for its
-/// answer: `{"path", "kept"}`.
+/// answer: `{"path", "kept"}`. With `tile`, a finish's texture: the
+/// surfaces drawn with it take that size.
 ///
 /// # Errors
 ///
@@ -880,9 +887,10 @@ pub async fn replace_in(
     room: &str,
     path: &str,
     bytes: &[u8],
+    tile: Option<[f64; 2]>,
     within: Duration,
 ) -> Result<Value, String> {
-    send_file(rooms, room, path, bytes, within, true).await
+    send_file(rooms, room, path, bytes, within, true, tile).await
 }
 
 async fn send_file(
@@ -892,6 +900,7 @@ async fn send_file(
     bytes: &[u8],
     within: Duration,
     replace: bool,
+    tile: Option<[f64; 2]>,
 ) -> Result<Value, String> {
     use base64::Engine as _;
     let (path, data) = (
@@ -903,6 +912,7 @@ async fn send_file(
         path,
         data,
         replace,
+        tile,
     })
     .await
 }
@@ -1382,6 +1392,7 @@ mod tests {
                     &room,
                     "products/p1/model.glb",
                     b"glTF",
+                    None,
                     Duration::from_millis(50),
                 )
                 .await
@@ -1392,6 +1403,27 @@ mod tests {
             json!({"type": "asset", "id": 2, "path": "products/p1/model.glb", "data": "Z2xURg==", "replace": true})
         );
         let _ = replacing.await;
+        // A finish's texture says the size its surfaces are drawn at.
+        let retiling = tokio::spawn({
+            let (rooms, room) = (rooms.clone(), room.clone());
+            async move {
+                replace_in(
+                    &rooms,
+                    &room,
+                    "products/p1/finish.jpg",
+                    b"\xff\xd8",
+                    Some([30.0, 60.0]),
+                    Duration::from_millis(50),
+                )
+                .await
+            }
+        });
+        assert_eq!(
+            serde_json::to_value(inbox.recv().await.expect("the texture")).unwrap(),
+            json!({"type": "asset", "id": 3, "path": "products/p1/finish.jpg", "data": "/9g=",
+                   "replace": true, "tile": [30.0, 60.0]})
+        );
+        let _ = retiling.await;
         let unanswered = stage_in(&rooms, &room, "x.glb", b"", Duration::from_millis(10)).await;
         assert_eq!(
             unanswered,

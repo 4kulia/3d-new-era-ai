@@ -511,57 +511,67 @@ impl Home {
 
     /// Every file path the home refers to.
     pub fn asset_paths(&self) -> Vec<String> {
-        fn material(out: &mut Vec<String>, m: Option<&crate::Material>) {
-            if let Some(path) = m.and_then(|m| m.image.as_ref()) {
-                out.push(path.clone());
+        let mut out = Vec::new();
+        self.for_each_asset(&mut |path| out.push(path.to_owned()));
+        out
+    }
+
+    /// Each file path the home refers to, in [`Home::asset_paths`] order,
+    /// without copying it: what a view checks every frame.
+    pub fn for_each_asset<'a>(&'a self, visit: &mut impl FnMut(&'a str)) {
+        fn material<'a>(visit: &mut impl FnMut(&'a str), m: Option<&'a crate::Material>) {
+            if let Some(path) = m.and_then(|m| m.image.as_deref()) {
+                visit(path);
             }
         }
-        fn piece(out: &mut Vec<String>, f: &Furniture) {
-            out.extend(
-                [&f.model, &f.info.icon, &f.info.plan_icon]
-                    .into_iter()
-                    .flatten()
-                    .cloned(),
-            );
-            out.extend(f.model_far.iter().map(|far| far.file.clone()));
-            out.extend(f.references.iter().map(|r| r.file.clone()));
-            material(out, f.texture.as_ref());
+        fn piece<'a>(visit: &mut impl FnMut(&'a str), f: &'a Furniture) {
+            for path in [&f.model, &f.info.icon, &f.info.plan_icon]
+                .into_iter()
+                .flatten()
+            {
+                visit(path);
+            }
+            if let Some(far) = &f.model_far {
+                visit(&far.file);
+            }
+            for reference in &f.references {
+                visit(&reference.file);
+            }
+            material(visit, f.texture.as_ref());
             for m in &f.materials {
-                material(out, m.texture.as_ref());
+                material(visit, m.texture.as_ref());
             }
             for child in &f.children {
-                piece(out, child);
+                piece(visit, child);
             }
         }
-        let mut out = Vec::new();
         if let Some(bg) = &self.background {
-            out.push(bg.path.clone());
+            visit(&bg.path);
         }
         for level in &self.levels {
             if let Some(bg) = &level.background {
-                out.push(bg.path.clone());
+                visit(&bg.path);
             }
         }
         for wall in &self.walls {
-            material(&mut out, wall.left_side.as_ref());
-            material(&mut out, wall.right_side.as_ref());
+            material(visit, wall.left_side.as_ref());
+            material(visit, wall.right_side.as_ref());
             for b in [&wall.left_baseboard, &wall.right_baseboard]
                 .into_iter()
                 .flatten()
             {
-                material(&mut out, b.material.as_ref());
+                material(visit, b.material.as_ref());
             }
         }
         for room in &self.rooms {
-            material(&mut out, room.floor_material.as_ref());
-            material(&mut out, room.ceiling_material.as_ref());
+            material(visit, room.floor_material.as_ref());
+            material(visit, room.ceiling_material.as_ref());
         }
         for f in &self.furniture {
-            piece(&mut out, f);
+            piece(visit, f);
         }
-        material(&mut out, self.environment.ground_texture.as_ref());
-        material(&mut out, self.environment.sky_texture.as_ref());
-        out
+        material(visit, self.environment.ground_texture.as_ref());
+        material(visit, self.environment.sky_texture.as_ref());
     }
 
     /// Door and window holes in each wall, in `walls` order. An opening
