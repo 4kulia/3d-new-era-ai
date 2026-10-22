@@ -63,6 +63,10 @@ impl TopViews {
         let mut views = Self::new(dir, assets, all);
         let (sender, receiver) = std::sync::mpsc::channel::<(u64, newera_core::Furniture)>();
         let worker = views.clone();
+        #[allow(
+            clippy::disallowed_methods,
+            reason = "the browser tab never asks for background views: `piece_images` returns early on wasm32"
+        )]
         std::thread::spawn(move || {
             for (key, piece) in receiver {
                 let image = worker.produce(&piece, key);
@@ -246,9 +250,13 @@ fn publish_cache_file(
 ) -> std::io::Result<()> {
     use std::sync::atomic::{AtomicU64, Ordering};
     static NEXT: AtomicU64 = AtomicU64::new(0);
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "only the disk-backed top views write here, which the browser tab never builds"
+    )]
+    let process = std::process::id();
     let temporary = path.with_extension(format!(
-        "{}.{}.tmp",
-        std::process::id(),
+        "{process}.{}.tmp",
         NEXT.fetch_add(1, Ordering::Relaxed)
     ));
     let result = {

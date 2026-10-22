@@ -793,6 +793,10 @@ pub fn render_photo(mesh: &Mesh, options: &PhotoOptions<'_>) -> RgbaImage {
     if threads == 1 {
         work(0, &mut pixels);
     } else {
+        #[allow(
+            clippy::disallowed_methods,
+            reason = "this branch needs more than one thread, and on wasm32 `threads` is 1 (the `cfg!` above)"
+        )]
         std::thread::scope(|s| {
             for (chunk_index, chunk) in pixels.chunks_mut(rows_per * w).enumerate() {
                 let work = &work;

@@ -1,0 +1,14 @@
+# Used by the browser-target clippy run only (CLIPPY_CONF_DIR=.clippy-wasm):
+# on native targets `web_time::Instant` and `web_time::SystemTime` are std's
+# own types, so the clock entries would flag the very replacements they ask for.
+# Every entry is a std call that panics on wasm32-unknown-unknown.
+disallowed-methods = [
+    { path = "std::time::Instant::now", reason = "panics in the browser tab; use web_time::Instant" },
+    { path = "std::time::SystemTime::now", reason = "panics in the browser tab; use web_time::SystemTime" },
+    { path = "std::time::SystemTime::elapsed", reason = "panics in the browser tab; use web_time::SystemTime" },
+    { path = "std::thread::spawn", reason = "panics in the browser tab; gate it to native or allow it with the reason it cannot run there" },
+    { path = "std::thread::sleep", reason = "panics in the browser tab; gate it to native or allow it with the reason it cannot run there" },
+    { path = "std::thread::scope", reason = "panics in the browser tab; gate it to native or allow it with the reason it cannot run there" },
+    { path = "std::process::id", reason = "panics in the browser tab; gate it to native" },
+    { path = "std::env::temp_dir", reason = "panics in the browser tab; gate it to native" },
+]

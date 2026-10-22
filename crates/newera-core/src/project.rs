@@ -125,13 +125,27 @@ pub fn from_project_json(json: &str) -> Result<Project, ProjectError> {
     Ok(Project { variants, active })
 }
 
+/// Where per-user data goes when no home is known. A browser tab has no
+/// temporary directory (asking std for it aborts the editor), so there it is
+/// the empty path, relative and never written.
+pub(crate) fn fallback_dir() -> PathBuf {
+    #[cfg(target_arch = "wasm32")]
+    {
+        PathBuf::new()
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        std::env::temp_dir()
+    }
+}
+
 /// Per-user cache directory for unpacked bundles and imports.
 pub fn cache_dir() -> PathBuf {
     let base = std::env::var_os("XDG_CACHE_HOME")
         .map(PathBuf::from)
         .or_else(|| std::env::var_os("LOCALAPPDATA").map(PathBuf::from))
         .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".cache")))
-        .unwrap_or_else(std::env::temp_dir);
+        .unwrap_or_else(fallback_dir);
     base.join("3d-new-era-ai")
 }
 

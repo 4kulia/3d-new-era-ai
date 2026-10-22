@@ -70,7 +70,7 @@ pub fn dir() -> PathBuf {
         .map(PathBuf::from)
         .or_else(|| std::env::var_os("APPDATA").map(PathBuf::from))
         .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))
-        .unwrap_or_else(std::env::temp_dir)
+        .unwrap_or_else(crate::project::fallback_dir)
         .join("3d-new-era-ai")
         .join("library")
 }

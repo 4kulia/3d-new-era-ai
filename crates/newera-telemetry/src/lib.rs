@@ -70,8 +70,22 @@ fn config_dir() -> PathBuf {
                 }
             })
         })
-        .unwrap_or_else(std::env::temp_dir);
+        .unwrap_or_else(fallback_dir);
     base.join("3d-new-era-ai")
+}
+
+/// Where settings go when no home is known. A browser tab has no temporary
+/// directory (asking std for it aborts the editor), so there it is the empty
+/// path, relative and never written.
+fn fallback_dir() -> PathBuf {
+    #[cfg(target_arch = "wasm32")]
+    {
+        PathBuf::new()
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        std::env::temp_dir()
+    }
 }
 
 #[derive(Debug, Default, serde::Serialize, serde::Deserialize)]

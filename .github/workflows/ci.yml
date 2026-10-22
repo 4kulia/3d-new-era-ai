@@ -179,7 +179,13 @@ jobs:
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: cargo build -p newera-web --release --target wasm32-unknown-unknown --locked
+      # .clippy-wasm bans the std calls that panic in the tab: Instant::now,
+      # SystemTime::now/elapsed, thread::spawn/sleep/scope, process::id and
+      # env::temp_dir. Native runs cannot use it: web_time's clocks are std's
+      # own there.
       - run: cargo clippy -p newera-app -p newera-editor-web --target wasm32-unknown-unknown --locked -- -D warnings
+        env:
+          CLIPPY_CONF_DIR: .clippy-wasm
       # Building it proves nothing about it running: this draws a wall with the
       # mouse in a headless Chrome and fails on any error the page logs.
       # A prebuilt wasm-bindgen: compiling it here would cost more than the

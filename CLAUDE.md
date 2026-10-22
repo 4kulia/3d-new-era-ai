@@ -21,9 +21,9 @@ estimates. Upstream's own rules are in `CONTRIBUTING.md` and `docs/`.
 - The browser e2e scripts (`scripts/web-mcp-e2e.mjs`, `scripts/web-editor-e2e.mjs`) run only in
   CI. A change to code the wasm tab runs (newera-app and the crates it links, newera-mcp and
   newera-render included; newera-editor-web; web/) is checked against what those scripts assert:
-  each scripted call through it is traced with the script's arguments (on wasm32 a std clock,
-  thread or file call panics) and the changed messages, sizes and counts are searched; the scripts
-  are updated in the same change; the builder and the reviewer both do this.
+  each scripted call through it is traced with the script's arguments (on wasm32 std's clock,
+  thread, temp_dir or process::id panics) and the changed messages, sizes and counts are
+  searched; the scripts are updated in the same change; the builder and the reviewer both do this.
 - The operator's Mac has ~8 GB free. Local cargo runs set `CARGO_PROFILE_DEV_DEBUG=0`, build only
   the crates under work (never `--workspace`), one build at a time across agents (wait on
   `pgrep -x cargo` and `pgrep -x rustc`, never `pgrep -f`: it matches any command line naming

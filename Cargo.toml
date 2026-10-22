@@ -14,6 +14,8 @@ keywords = ["3d", "home-design", "floor-plan", "mcp", "ai"]
 categories = ["graphics", "command-line-utilities"]
 
 [workspace.dependencies]
+# Clocks that work in a browser tab (std's panic there); std's own natively.
+web-time = "1.1"
 # Internal crates
 newera-core = { path = "crates/newera-core", version = "3.1.0" }
 newera-mcp = { path = "crates/newera-mcp", version = "3.1.0" }

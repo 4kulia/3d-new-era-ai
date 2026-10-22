@@ -26,7 +26,8 @@
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::time::{Duration, Instant};
+use std::time::Duration;
+use web_time::Instant;
 
 use serde::{Deserialize, Serialize};
 
@@ -228,6 +229,17 @@ fn read_capped(mut stream: impl Read) -> String {
     String::from_utf8_lossy(&buf).into_owned()
 }
 
+/// A helper thread of [`run`].
+#[allow(
+    clippy::disallowed_methods,
+    reason = "only `run` calls it, after `Command::spawn` succeeded, which a browser tab never does"
+)]
+fn helper<T: Send + 'static>(
+    work: impl FnOnce() -> T + Send + 'static,
+) -> std::thread::JoinHandle<T> {
+    std::thread::spawn(work)
+}
+
 /// Runs `plugin` with `args` on standard input and waits up to `timeout`.
 ///
 /// # Errors
@@ -336,18 +348,12 @@ pub fn run(
         .map_err(|e| format!("cannot start `{}`: {e}", plugin.command.join(" ")))?;
     if let Some(mut stdin) = child.stdin.take() {
         let input = args.to_string();
-        std::thread::spawn(move || {
+        helper(move || {
             let _ = stdin.write_all(input.as_bytes());
         });
     }
-    let stdout = child
-        .stdout
-        .take()
-        .map(|s| std::thread::spawn(move || read_capped(s)));
-    let stderr = child
-        .stderr
-        .take()
-        .map(|s| std::thread::spawn(move || read_capped(s)));
+    let stdout = child.stdout.take().map(|s| helper(move || read_capped(s)));
+    let stderr = child.stderr.take().map(|s| helper(move || read_capped(s)));
 
     let started = Instant::now();
     let mut timed_out = false;
@@ -366,7 +372,13 @@ pub fn run(
                 let _ = child.kill();
                 break child.wait().ok();
             }
-            Ok(None) => std::thread::sleep(Duration::from_millis(20)),
+            Ok(None) => {
+                #[allow(
+                    clippy::disallowed_methods,
+                    reason = "reached only after `Command::spawn` succeeded, which a browser tab never does"
+                )]
+                std::thread::sleep(Duration::from_millis(20));
+            }
             Err(err) => return Err(err.to_string()),
         }
     };

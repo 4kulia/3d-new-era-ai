@@ -3469,6 +3469,7 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.21",
+ "web-time",
  "zip",
 ]
 
@@ -3559,6 +3560,7 @@ dependencies = [
  "newera-core",
  "serde",
  "serde_json",
+ "web-time",
 ]
 
 [[package]]

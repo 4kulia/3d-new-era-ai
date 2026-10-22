@@ -212,29 +212,6 @@ pub(crate) fn register(app: &mut NewEraApp, program: &'static str, args: Vec<Str
     });
 }
 
-/// Now, in Unix milliseconds. A browser has no `SystemTime`: asking for it
-/// there aborts the whole editor, so the clock comes from the page.
-pub(crate) fn now_ms() -> u64 {
-    #[cfg(target_arch = "wasm32")]
-    {
-        // `Date::now` is milliseconds since the epoch, as a float: whole
-        // numbers, and exact well past this century. The clamp is for a
-        // machine whose clock is set before 1970 or absurdly far ahead.
-        #[allow(
-            clippy::cast_possible_truncation,
-            clippy::cast_sign_loss,
-            reason = "a date in milliseconds fits u64 exactly once clamped"
-        )]
-        {
-            js_sys::Date::now().clamp(0.0, 9e15) as u64
-        }
-    }
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        newera_core::collab::now_ms()
-    }
-}
-
 /// How long ago, in words, for a moment in Unix milliseconds.
 pub(crate) fn ago(now_ms: u64, then_ms: u64) -> String {
     let seconds = now_ms.saturating_sub(then_ms) / 1000;
@@ -262,7 +239,7 @@ impl Pulse {
             agents: agents.list().to_vec(),
             recent: agents.recent().to_vec(),
             calls: agents.calls(),
-            now_ms: now_ms(),
+            now_ms: newera_core::collab::now_ms(),
         }
     }
 

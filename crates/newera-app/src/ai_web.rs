@@ -645,10 +645,12 @@ fn hold(
                         .and_then(serde_json::Value::as_str)
                         .unwrap_or("MCP");
                     let version = message.get("version").and_then(serde_json::Value::as_str);
-                    document
-                        .write()
-                        .agents_mut()
-                        .hello(None, name, version, crate::ai::now_ms());
+                    document.write().agents_mut().hello(
+                        None,
+                        name,
+                        version,
+                        newera_core::collab::now_ms(),
+                    );
                     ctx.request_repaint();
                 }
                 Some("call") => {
@@ -682,10 +684,11 @@ fn hold(
                             run(&document, &name, args)
                         };
                         operation("end", &diagnostic, &name, document.read().revision());
-                        document
-                            .write()
-                            .agents_mut()
-                            .called(None, &name, crate::ai::now_ms());
+                        document.write().agents_mut().called(
+                            None,
+                            &name,
+                            newera_core::collab::now_ms(),
+                        );
                         let reply = match answer {
                             Ok(result) => serde_json::json!({
                                 "type": "result", "id": id, "ok": true, "result": result
@@ -1365,6 +1368,12 @@ fn run(
         return Err(format!(
             "{name} runs in the desktop app: it needs files on the person's own disk"
         ));
+    }
+    if name == "file" && args["action"] == "open" {
+        return Err(
+            "file open is not available in the browser tab: open the project with the editor's Open button"
+                .to_owned(),
+        );
     }
     if name == "file" && args["action"] == "save" {
         let doc = document.read();

@@ -294,10 +294,11 @@ impl Agents {
     }
 }
 
-/// Milliseconds since the Unix epoch.
+/// Milliseconds since the Unix epoch. `web_time` is std's clock natively and
+/// the page's `Date` in a browser tab, where std's clock aborts the editor.
 pub fn now_ms() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
+    web_time::SystemTime::now()
+        .duration_since(web_time::UNIX_EPOCH)
         .map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
 }
 
@@ -305,6 +306,17 @@ pub fn now_ms() -> u64 {
 mod tests {
     use super::*;
     use crate::WallId;
+
+    #[test]
+    fn now_ms_is_a_current_unix_time_that_does_not_go_back() {
+        let first = now_ms();
+        // 2024-01-01 and 2200-01-01 in Unix milliseconds.
+        assert!(
+            (1_704_067_200_000..7_258_118_400_000).contains(&first),
+            "{first}"
+        );
+        assert!(now_ms() >= first);
+    }
 
     #[test]
     fn sessions_join_update_edit_and_expire() {

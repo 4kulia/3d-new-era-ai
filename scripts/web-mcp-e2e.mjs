@@ -242,6 +242,32 @@ try {
       throw new Error(`renders did not use responsive workers: ${audit}`);
     }
     ok("images ran in disposable workers with progress and a responsive page");
+    // Each of these used to reach a std call that panics on wasm32 (the clock,
+    // or `temp_dir` through a native cache or library directory) and killed
+    // the tab. They may answer with an error; they may not crash it.
+    const guarded = [
+      ["sessions", {}],
+      ["file", {action: "open", path: "/nowhere/project.newera"}],
+      ["file", {action: "open", path: "/nowhere/house.sh3d"}],
+      ["place", {items: [{model: "library:chair", at: [100, 100]}]}],
+    ];
+    for (const [index, [name, args]] of guarded.entries()) {
+      const answered = await rpc(mcpUrl, {
+        jsonrpc: "2.0", id: 60 + index, method: "tools/call", params: {name, arguments: args},
+      });
+      if (!answered || (answered.result === undefined && answered.error === undefined)) {
+        throw new Error(`${name} ${JSON.stringify(args)} got no JSON-RPC answer`);
+      }
+      await frames(2);
+      const fatal = await evaluate("document.getElementById('failed-why')?.textContent || ''");
+      if (fatal) throw new Error(`${name} ${JSON.stringify(args)} killed the editor: ${fatal}`);
+      const alive = await rpc(mcpUrl, {jsonrpc: "2.0", id: 70 + index, method: "tools/call",
+        params: {name: "home", arguments: {}}});
+      if (alive?.result?.isError || !alive?.result?.content?.length) {
+        throw new Error(`the editor did not answer home after ${name}`);
+      }
+      ok(`${name} ${JSON.stringify(args)} answered and the editor stayed alive`);
+    }
     const oversized = await rpc(mcpUrl, {jsonrpc:'2.0',id:29,method:'tools/call',
       params:{name:'render_plan',arguments:{w:800,h:600}}});
     const reduced = JSON.stringify(oversized);

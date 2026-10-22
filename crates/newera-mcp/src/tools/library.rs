@@ -42,7 +42,7 @@ pub(crate) fn root() -> Result<std::path::PathBuf, String> {
         return Ok(dir);
     }
     let dir = library::dir();
-    if newera_core::vfs::allowed(&dir.join("x")) {
+    if !cfg!(target_arch = "wasm32") && newera_core::vfs::allowed(&dir.join("x")) {
         Ok(dir)
     } else {
         Err("the model library is on the desktop editor only".to_owned())
