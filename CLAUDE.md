@@ -12,8 +12,8 @@ estimates. Upstream's own rules are in `CONTRIBUTING.md` and `docs/`.
   aside, and changes for the work in hand (container files, /opt/interioragent config) need no
   asking. Other services on the host keep the canon's rule.
 - When `Test (macos-latest)` is CI's only non-success, cancelled with "not acquired by Runner",
-  re-run it once; cancelled again, dispatch `deploy-interioragent.yml` on `main`. A failed job is never
-  bypassed this way.
+  re-run it once; cancelled again, dispatch `deploy-interioragent.yml` on `main`. A failed job is
+  never bypassed this way.
 - One code-writing agent at a time in this working tree: the MCP tool fixtures
   (`crates/newera-mcp/tests/fixtures/tool-surface.json`, `tool-budget.json`, `tool-search.json`),
   newera-cloud `mcp.rs`/`lib.rs` and flow tests are shared by almost every unit. A second unit
@@ -24,10 +24,10 @@ estimates. Upstream's own rules are in `CONTRIBUTING.md` and `docs/`.
   each scripted call through it is traced with the script's arguments (on wasm32 a std clock,
   thread or file call panics) and the changed messages, sizes and counts are searched; the scripts
   are updated in the same change; the builder and the reviewer both do this.
-- The operator's Mac has ~8 GB free. Local cargo runs set `CARGO_PROFILE_DEV_DEBUG=0`, build only the crates under
-  work (never `--workspace`), one build at a time across agents (wait on `pgrep -x cargo` and
-  `pgrep -x rustc`, never `pgrep -f`: it matches any command line naming cargo), each in a
-  `CARGO_TARGET_DIR` named for its agent and removed by that agent alone when its step ends; when
-  another's leaves no room, wait for its step to end.
+- The operator's Mac has ~8 GB free. Local cargo runs set `CARGO_PROFILE_DEV_DEBUG=0`, build only
+  the crates under work (never `--workspace`), one build at a time across agents (wait on
+  `pgrep -x cargo` and `pgrep -x rustc`, never `pgrep -f`: it matches any command line naming
+  cargo), each in a `CARGO_TARGET_DIR` named for its agent and removed by that agent alone when its
+  step ends; when another's leaves no room, wait for its step to end.
 - Our working documents (plans, notes) live in `docs/` but never enter git: each such path is
   listed in `.git/info/exclude`, never in `.gitignore`.
