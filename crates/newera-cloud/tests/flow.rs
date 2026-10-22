@@ -5361,7 +5361,7 @@ async fn a_product_without_a_model_is_placed_as_a_placeholder() {
     )
     .await;
     assert_eq!(placed["isError"], false, "{placed}");
-    let note = "p1 has no 3D model yet: it is drawn as a placeholder (sofa-3), a generated approximation stretched to the piece's box. edit_products action=attach_model gives it a model, which replaces the placeholder at once in the project open now (the editor tab, or the server's copy) and in any other project the next time the product is placed there";
+    let note = "p1 has no 3D model yet: it is drawn as a placeholder (sofa-3), a generated approximation stretched to the piece's box. edit_products action=attach_model gives it a model, which replaces the placeholder at once in the project open now (the editor tab, or the server's copy) and in any other project the next time that project is opened";
     let content = placed["content"].as_array().unwrap();
     assert_eq!(
         content.last().unwrap(),
@@ -5587,7 +5587,7 @@ async fn a_product_placed_in_the_tab_arrives_before_the_call() {
     assert_eq!(placed["content"][0]["text"], "ok ids=f1");
     assert_eq!(
         placed["content"][1]["text"],
-        "p1 has no 3D model yet: it is drawn as a placeholder (sofa-3), a generated approximation stretched to the piece's box. edit_products action=attach_model gives it a model, which replaces the placeholder at once in the project open now (the editor tab, or the server's copy) and in any other project the next time the product is placed there"
+        "p1 has no 3D model yet: it is drawn as a placeholder (sofa-3), a generated approximation stretched to the piece's box. edit_products action=attach_model gives it a model, which replaces the placeholder at once in the project open now (the editor tab, or the server's copy) and in any other project the next time that project is opened"
     );
     tab_left_alone(&mut socket).await;
 
@@ -5815,7 +5815,7 @@ async fn an_attached_model_replaces_the_placeholder_in_the_open_project() {
     );
     assert_eq!(
         attached["drawn"],
-        "in the active project now, saved with it; any other project takes it the next time the product is placed there"
+        "in the active project now, saved with it; any other project takes it the next time it is opened"
     );
     let kept: Vec<u8> =
         sqlx::query_scalar("select data from product_assets where product_id = 'p1'")
@@ -5873,7 +5873,7 @@ async fn an_attached_model_goes_to_the_open_tab() {
     let attached = said_json(&attaching.await.unwrap());
     assert_eq!(
         attached["drawn"],
-        "in the open editor tab now; any other project takes it the next time the product is placed there"
+        "in the open editor tab now; any other project takes it the next time it is opened"
     );
     tab_left_alone(&mut socket).await;
     // A tab whose document does not draw the product keeps nothing, and
@@ -5899,7 +5899,7 @@ async fn an_attached_model_goes_to_the_open_tab() {
     .await;
     assert_eq!(
         said_json(&again.await.unwrap())["drawn"],
-        "each project takes it the next time the product is placed there"
+        "each project takes it the next time it is opened"
     );
     tab_left_alone(&mut socket).await;
     hang_up(&state, socket, "a@example.com").await;
@@ -7931,7 +7931,7 @@ async fn a_new_swatch_replaces_the_texture_where_it_is_drawn() {
     assert_eq!(set["fields"]["swatch_image"]["value"], tall);
     assert_eq!(
         set["drawn"],
-        "in the active project now, saved with it; any other project takes it the next time edit_finishes puts the product on a surface there"
+        "in the active project now, saved with it; any other project takes it the next time it is opened"
     );
     assert_eq!(set["files"].as_array().map(Vec::len), Some(1), "{set}");
     assert_eq!(set["files"][0][0], "texture");
@@ -7977,7 +7977,7 @@ async fn a_new_swatch_replaces_the_texture_where_it_is_drawn() {
     // drawn with its picture, which stands up, 20 across and 60 up.
     assert_eq!(
         sized["drawn"],
-        "in the active project now, saved with it; any other project takes it the next time edit_finishes puts the product on a surface there"
+        "in the active project now, saved with it; any other project takes it the next time it is opened"
     );
     let (wall, _) = stored_wall(&state, &project, "").await;
     assert_eq!(wall.left_side.and_then(|m| m.tile), Some([20.0, 60.0]));
@@ -8085,7 +8085,7 @@ async fn a_finish_put_on_a_wall_in_the_tab_gets_its_texture_first() {
     .await;
     assert_eq!(
         said_json(&setting.await.unwrap())["drawn"],
-        "in the open editor tab now; any other project takes it the next time edit_finishes puts the product on a surface there"
+        "in the open editor tab now; any other project takes it the next time it is opened"
     );
     tab_left_alone(&mut socket).await;
 
@@ -8130,7 +8130,7 @@ async fn a_finish_put_on_a_wall_in_the_tab_gets_its_texture_first() {
     .await;
     assert_eq!(
         said_json(&sizing.await.unwrap())["drawn"],
-        "in the open editor tab now; any other project takes it the next time edit_finishes puts the product on a surface there"
+        "in the open editor tab now; any other project takes it the next time it is opened"
     );
     tab_left_alone(&mut socket).await;
     hang_up(&state, socket, "a@example.com").await;
@@ -8271,12 +8271,12 @@ async fn a_tab_that_does_not_resize_the_surfaces_is_not_taken_at_its_word() {
         (
             json!({"swatch_image": format!("{pictures}/tall.png")}),
             json!({"path": "products/tile/finish.jpg", "kept": true}),
-            "the picture is replaced in the open editor tab, but the surfaces drawn with it keep their size (the tab did not resize them): reload the tab, then edit_finishes assign again; any other project takes it the next time edit_finishes puts the product on a surface there",
+            "the picture is replaced in the open editor tab, but the surfaces drawn with it keep their size (the tab did not resize them): reload the tab, which opens them at their size; any other project takes it the next time it is opened",
         ),
         (
             json!({"tile_length_cm": 90}),
             json!({"path": "products/tile/finish.jpg", "kept": true, "retiled": "w1 not found"}),
-            "the picture is replaced in the open editor tab, but the surfaces drawn with it keep their size (w1 not found): reload the tab, then edit_finishes assign again; any other project takes it the next time edit_finishes puts the product on a surface there",
+            "the picture is replaced in the open editor tab, but the surfaces drawn with it keep their size (w1 not found): reload the tab, which opens them at their size; any other project takes it the next time it is opened",
         ),
     ] {
         let setting = tokio::spawn({
@@ -8302,4 +8302,580 @@ async fn a_tab_that_does_not_resize_the_surfaces_is_not_taken_at_its_word() {
         tab_left_alone(&mut socket).await;
     }
     hang_up(&state, socket, "a@example.com").await;
+}
+
+// ------------------------------------- a closed project opens with the current files
+
+/// The project as the editor tab (or a download) opens it: its revision
+/// and its bytes.
+async fn opened(base: &str, cookie: &str, id: &str) -> (i64, Vec<u8>) {
+    let fetched = client()
+        .get(format!("{base}/account/projects/{id}"))
+        .header("cookie", cookie)
+        .header("origin", SITE)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(fetched.status(), 200);
+    let revision = fetched.headers()["x-project-revision"]
+        .to_str()
+        .unwrap()
+        .parse()
+        .unwrap();
+    (revision, fetched.bytes().await.unwrap().to_vec())
+}
+
+/// The file at `path` inside a project's bytes.
+fn file_in(bytes: &[u8], path: &str) -> Option<Vec<u8>> {
+    let (_, files) = newera_core::project_from_bytes(bytes).unwrap();
+    files
+        .into_iter()
+        .find(|(name, _)| name == path)
+        .map(|(_, data)| data)
+}
+
+/// The first wall's left side inside a project's bytes.
+fn left_side_in(bytes: &[u8]) -> Option<newera_core::Material> {
+    let (project, _) = newera_core::project_from_bytes(bytes).unwrap();
+    project.variants[0].1.walls[0].left_side.clone()
+}
+
+/// Makes another project the active one, so the engine drops its copy of
+/// the one before: that one is closed everywhere.
+async fn close_by_opening_another(base: &str, access: &str) {
+    let made = tool(
+        base,
+        access,
+        "file",
+        json!({"action": "new", "name": "Other"}),
+    )
+    .await;
+    assert_eq!(made, said_text("ok new project Other"));
+}
+
+fn said_text(text: &str) -> Value {
+    json!({"content": [{"type": "text", "text": text}], "isError": false,
+           "structuredContent": {"ok": true, "text": text}})
+}
+
+/// A model attached while the project that draws the product is closed
+/// reaches it the next time it is opened: in the editor tab, in a download
+/// and in the engine's copy. The stored project is not written by the
+/// opening, so its revision stays, and a tab that loaded before saves on it.
+#[tokio::test]
+async fn a_closed_project_opens_with_the_model_attached_since() {
+    let Some((base, state)) = service().await else {
+        return;
+    };
+    let files = model_server().await;
+    state.links.allow_for_tests("127.0.0.1".parse().unwrap());
+    let (cookie, access, project) = drawn_project(&base, &state, "a@example.com").await;
+    stock_sofa(&state, "a@example.com", "p1").await;
+    let placed = tool(
+        &base,
+        &access,
+        "place",
+        json!({"items": [{"model": "product:p1", "at": [200, 150]}]}),
+    )
+    .await;
+    assert_eq!(placed["isError"], false, "{placed}");
+    let placeholder = kept_model(&state, "p1").await.2;
+    // A tab loads the project before the model comes, to save on it later.
+    let (loaded_at, tab_copy) = opened(&base, &cookie, &project).await;
+    close_by_opening_another(&base, &access).await;
+
+    let attached = said_json(
+        &tool(
+            &base,
+            &access,
+            "edit_products",
+            json!({"id": "p1", "action": "attach_model", "url": format!("{files}/sofa.glb")}),
+        )
+        .await,
+    );
+    assert_eq!(
+        attached["drawn"],
+        "each project takes it the next time it is opened"
+    );
+    let model = kept_model(&state, "p1").await.2;
+    assert_ne!(model, placeholder);
+    let before = stored(&state, &project).await;
+    assert_eq!(before.0, loaded_at);
+    assert_eq!(
+        file_in(&before.1, "products/p1/model.glb"),
+        Some(placeholder),
+        "nothing wrote the closed project"
+    );
+
+    // The editor tab, and a download, open it with the new model, at the
+    // stored revision; opening writes nothing.
+    let (revision, bytes) = opened(&base, &cookie, &project).await;
+    assert_eq!(revision, loaded_at);
+    assert_eq!(
+        file_in(&bytes, "products/p1/model.glb"),
+        Some(model.clone())
+    );
+    let (pieces, _) = {
+        let (p, f) = newera_core::project_from_bytes(&bytes).unwrap();
+        (p.variants[0].1.furniture.clone(), f)
+    };
+    assert_eq!(
+        pieces,
+        kept_project(&state, &project).await.0,
+        "the same pieces"
+    );
+    assert_eq!(stored(&state, &project).await, before);
+
+    // The tab that loaded before saves on its revision: the opening since
+    // did not turn it away.
+    let saved = put(
+        &base,
+        &project,
+        Some(&cookie),
+        Some(SITE),
+        Some(&loaded_at.to_string()),
+        tab_copy.clone(),
+    )
+    .await;
+    assert_eq!(saved.status(), 200);
+    assert_eq!(stored(&state, &project).await, (loaded_at + 1, tab_copy));
+
+    // The engine's copy, opened afresh, draws the new model too: its next
+    // save keeps it.
+    let reopened = tool(
+        &base,
+        &access,
+        "file",
+        json!({"action": "open", "path": project}),
+    )
+    .await;
+    assert_eq!(reopened["isError"], false, "{reopened}");
+    let walled = add_wall(&base, &access, 500).await;
+    assert_eq!(walled["isError"], false, "{walled}");
+    let (revision, bytes) = stored(&state, &project).await;
+    assert_eq!(revision, loaded_at + 2);
+    assert_eq!(file_in(&bytes, "products/p1/model.glb"), Some(model));
+}
+
+/// A model made by the generator while the project is closed reaches it
+/// the next time it is opened.
+#[tokio::test]
+async fn a_closed_project_opens_with_the_model_generated_since() {
+    let (_stand_in, url) = generator_up(vec![Said::Model(generated_glb())]).await;
+    let Some((base, state)) =
+        generating_service(&url, std::time::Duration::from_millis(100), None).await
+    else {
+        return;
+    };
+    let (cookie, access, project) = drawn_project(&base, &state, "a@example.com").await;
+    stock_photographed_sofa(&state, "a@example.com", "p1").await;
+    let placed = tool(
+        &base,
+        &access,
+        "place",
+        json!({"items": [{"model": "product:p1", "at": [200, 150]}]}),
+    )
+    .await;
+    assert_eq!(placed["isError"], false, "{placed}");
+    let placeholder = kept_model(&state, "p1").await.2;
+    close_by_opening_another(&base, &access).await;
+    let _ = tool(
+        &base,
+        &access,
+        "edit_products",
+        json!({"id": "p1", "action": "generate"}),
+    )
+    .await;
+    let _worker = newera_cloud::generation::start(state.clone()).expect("a generator");
+    let _ = job_when(&base, &access, "p1", |j| j["status"] == "done").await;
+    let before = stored(&state, &project).await;
+    assert_eq!(
+        file_in(&before.1, "products/p1/model.glb"),
+        Some(placeholder)
+    );
+    let (revision, bytes) = opened(&base, &cookie, &project).await;
+    assert_eq!(revision, before.0);
+    assert_eq!(
+        file_in(&bytes, "products/p1/model.glb"),
+        Some(generated_glb())
+    );
+}
+
+/// A finish's new swatch, and a new size, reach a closed project the next
+/// time it is opened: the new texture, and the surfaces drawn with it at
+/// the size it is drawn at now — in the tab and in the engine's copy.
+#[tokio::test]
+async fn a_closed_project_opens_with_the_finishs_texture_and_size_since() {
+    let Some((base, state)) = service().await else {
+        return;
+    };
+    let pictures = swatch_server().await;
+    state.links.allow_for_tests("127.0.0.1".parse().unwrap());
+    let (cookie, access, project) = drawn_project(&base, &state, "a@example.com").await;
+    stock_finishes(&state, "a@example.com", &format!("{pictures}/tile.png")).await;
+    let assigned = tool(
+        &base,
+        &access,
+        "edit_finishes",
+        json!({"action": "assign", "surface": "w1:left", "product": "tile"}),
+    )
+    .await;
+    assert_eq!(assigned["isError"], false, "{assigned}");
+    let look = |tile: [f64; 2]| {
+        Some(newera_core::Material {
+            image: Some("products/tile/finish.jpg".into()),
+            tile: Some(tile),
+            ..newera_core::Material::default()
+        })
+    };
+    let (wide, _) = kept_texture(&state, "tile").await;
+    let before = stored(&state, &project).await;
+    assert_eq!(left_side_in(&before.1), look([60.0, 30.0]));
+    close_by_opening_another(&base, &access).await;
+
+    let tall = format!("{pictures}/tall.png");
+    let set = said_json(
+        &tool(
+            &base,
+            &access,
+            "edit_products",
+            json!({"id": "tile", "action": "set", "fields": {"swatch_image": tall}}),
+        )
+        .await,
+    );
+    assert_eq!(
+        set["drawn"],
+        "each project takes it the next time it is opened"
+    );
+    let (standing, _) = kept_texture(&state, "tile").await;
+    assert_eq!(
+        stored(&state, &project).await,
+        before,
+        "closed: not written"
+    );
+    assert_eq!(file_in(&before.1, "products/tile/finish.jpg"), Some(wide));
+
+    let (revision, bytes) = opened(&base, &cookie, &project).await;
+    assert_eq!(revision, before.0);
+    assert_eq!(
+        file_in(&bytes, "products/tile/finish.jpg"),
+        Some(standing.clone())
+    );
+    assert_eq!(
+        left_side_in(&bytes),
+        look([30.0, 60.0]),
+        "the new picture stands up, so the tile on the wall does"
+    );
+
+    // A new size alone: the same texture, the surfaces retiled.
+    let sized = said_json(
+        &tool(
+            &base,
+            &access,
+            "edit_products",
+            json!({"id": "tile", "action": "set", "fields": {"tile_width_cm": 20}}),
+        )
+        .await,
+    );
+    assert_eq!(
+        sized["drawn"],
+        "each project takes it the next time it is opened"
+    );
+    let (_, bytes) = opened(&base, &cookie, &project).await;
+    assert_eq!(left_side_in(&bytes), look([20.0, 60.0]));
+    assert_eq!(stored(&state, &project).await, before);
+
+    // The engine's copy opens the same way, and its next save keeps it.
+    let reopened = tool(
+        &base,
+        &access,
+        "file",
+        json!({"action": "open", "path": project}),
+    )
+    .await;
+    assert_eq!(reopened["isError"], false, "{reopened}");
+    let walled = add_wall(&base, &access, 500).await;
+    assert_eq!(walled["isError"], false, "{walled}");
+    let (revision, bytes) = stored(&state, &project).await;
+    assert_eq!(revision, before.0 + 1);
+    assert_eq!(file_in(&bytes, "products/tile/finish.jpg"), Some(standing));
+    assert_eq!(left_side_in(&bytes), look([20.0, 60.0]));
+}
+
+/// A project that draws no product, and one that draws products with their
+/// current files, open as the very bytes stored.
+#[tokio::test]
+async fn a_project_with_nothing_to_bring_up_to_date_opens_as_stored() {
+    let Some((base, state)) = service().await else {
+        return;
+    };
+    let files = model_server().await;
+    state.links.allow_for_tests("127.0.0.1".parse().unwrap());
+    let (cookie, access, project) = drawn_project(&base, &state, "a@example.com").await;
+    let (revision, data) = stored(&state, &project).await;
+    assert_eq!(opened(&base, &cookie, &project).await, (revision, data));
+
+    stock_sofa(&state, "a@example.com", "p1").await;
+    let attached = tool(
+        &base,
+        &access,
+        "edit_products",
+        json!({"id": "p1", "action": "attach_model", "url": format!("{files}/sofa.glb")}),
+    )
+    .await;
+    assert_eq!(attached["isError"], false, "{attached}");
+    let placed = tool(
+        &base,
+        &access,
+        "place",
+        json!({"items": [{"model": "product:p1", "at": [200, 150]}]}),
+    )
+    .await;
+    assert_eq!(placed["isError"], false, "{placed}");
+    let current = stored(&state, &project).await;
+    assert_eq!(opened(&base, &cookie, &project).await, current);
+}
+
+/// `project` as the bytes of a `.newera` holding `files`, written the way
+/// the engine and the tab write one: its files read from memory, mounted
+/// inside the engine's root.
+fn bundle_of(
+    state: &AppState,
+    project: newera_core::Project,
+    files: newera_core::BundledFiles,
+) -> Vec<u8> {
+    let dir = state
+        .engine
+        .root()
+        .join("cloud-projects")
+        .join(secret::id());
+    newera_core::vfs::mount(&dir, files);
+    let mut doc = newera_core::Document::default();
+    project.load_into(&mut doc);
+    doc.set_asset_dir(Some(dir.clone()));
+    let bytes = newera_core::to_bundle_bytes(&doc);
+    newera_core::vfs::unmount(&dir);
+    bytes.unwrap()
+}
+
+/// Puts `data` in place of the stored project's bytes, at its revision.
+async fn store_bytes(state: &AppState, project: &str, data: &[u8]) {
+    sqlx::query("update projects set data = $2, size = $3 where id = $1")
+        .bind(project)
+        .bind(data)
+        .bind(i32::try_from(data.len()).unwrap())
+        .execute(&state.db)
+        .await
+        .unwrap();
+}
+
+/// A piece drawn with `model`, at the next id of `home`.
+fn piece_with(home: &mut newera_core::Home, model: &str) {
+    let mut piece = newera_core::Furniture {
+        model: Some(model.into()),
+        ..newera_core::Furniture::default()
+    };
+    piece.id = home.new_furniture_id();
+    home.furniture.push(piece);
+}
+
+/// A project that names a file it does not hold — a dangling reference, kept
+/// on purpose by every save — still opens with its products' current files,
+/// and keeps the reference.
+#[tokio::test]
+async fn a_closed_project_with_a_missing_file_opens_with_the_model_attached_since() {
+    let Some((base, state)) = service().await else {
+        return;
+    };
+    let files = model_server().await;
+    state.links.allow_for_tests("127.0.0.1".parse().unwrap());
+    let (cookie, access, project) = drawn_project(&base, &state, "a@example.com").await;
+    stock_sofa(&state, "a@example.com", "p1").await;
+    let placed = tool(
+        &base,
+        &access,
+        "place",
+        json!({"items": [{"model": "product:p1", "at": [200, 150]}]}),
+    )
+    .await;
+    assert_eq!(placed["isError"], false, "{placed}");
+    close_by_opening_another(&base, &access).await;
+    let (_, data) = stored(&state, &project).await;
+    let (mut drawn, inside) = newera_core::project_from_bytes(&data).unwrap();
+    piece_with(&mut drawn.variants[0].1, "models/missing.glb");
+    store_bytes(&state, &project, &bundle_of(&state, drawn, inside)).await;
+    let attached = tool(
+        &base,
+        &access,
+        "edit_products",
+        json!({"id": "p1", "action": "attach_model", "url": format!("{files}/sofa.glb")}),
+    )
+    .await;
+    assert_eq!(attached["isError"], false, "{attached}");
+
+    let (_, bytes) = opened(&base, &cookie, &project).await;
+    assert!(
+        file_in(&bytes, "products/p1/model.glb") == Some(kept_model(&state, "p1").await.2),
+        "the project opens with the attached model"
+    );
+    let (back, _) = newera_core::project_from_bytes(&bytes).unwrap();
+    let models: Vec<Option<String>> = back.variants[0]
+        .1
+        .furniture
+        .iter()
+        .map(|f| f.model.clone())
+        .collect();
+    assert_eq!(
+        models,
+        [
+            Some("products/p1/model.glb".to_owned()),
+            Some("models/missing.glb".to_owned())
+        ]
+    );
+}
+
+/// A project naming a product of another account is not given that
+/// account's files.
+#[tokio::test]
+async fn a_project_is_given_only_its_own_accounts_product_files() {
+    let Some((base, state)) = service().await else {
+        return;
+    };
+    let files = model_server().await;
+    state.links.allow_for_tests("127.0.0.1".parse().unwrap());
+    let (_, owner, _) = drawn_project(&base, &state, "a@example.com").await;
+    stock_sofa(&state, "a@example.com", "p1").await;
+    let attached = tool(
+        &base,
+        &owner,
+        "edit_products",
+        json!({"id": "p1", "action": "attach_model", "url": format!("{files}/sofa.glb")}),
+    )
+    .await;
+    assert_eq!(attached["isError"], false, "{attached}");
+
+    let (cookie, _, project) = drawn_project(&base, &state, "b@example.com").await;
+    let (_, data) = stored(&state, &project).await;
+    let (mut drawn, mut inside) = newera_core::project_from_bytes(&data).unwrap();
+    piece_with(&mut drawn.variants[0].1, "products/p1/model.glb");
+    inside.push(("products/p1/model.glb".to_owned(), b"glTF of b".to_vec()));
+    store_bytes(&state, &project, &bundle_of(&state, drawn, inside)).await;
+    let kept = stored(&state, &project).await;
+    assert_eq!(opened(&base, &cookie, &project).await, kept);
+}
+
+/// A writer the warnings of one test go to.
+#[derive(Clone, Default)]
+struct Caught(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+
+impl std::io::Write for Caught {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.0.lock().unwrap().extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+/// A project whose files cannot be written into a new bundle — one naming
+/// a file outside the projects — opens as stored, and the service says why.
+#[tokio::test]
+async fn a_project_that_cannot_be_rewritten_opens_as_stored() {
+    let caught = Caught::default();
+    let writer = caught.clone();
+    let _logs = tracing::subscriber::set_default(
+        tracing_subscriber::fmt()
+            .with_writer(move || writer.clone())
+            .with_ansi(false)
+            .finish(),
+    );
+    let Some((base, state)) = service().await else {
+        return;
+    };
+    let files = model_server().await;
+    state.links.allow_for_tests("127.0.0.1".parse().unwrap());
+    let (cookie, access, project) = drawn_project(&base, &state, "a@example.com").await;
+    stock_sofa(&state, "a@example.com", "p1").await;
+    let attached = tool(
+        &base,
+        &access,
+        "edit_products",
+        json!({"id": "p1", "action": "attach_model", "url": format!("{files}/sofa.glb")}),
+    )
+    .await;
+    assert_eq!(attached["isError"], false, "{attached}");
+    close_by_opening_another(&base, &access).await;
+    // Kept as the project's text alone: its paths stand as written.
+    let mut home = newera_core::Home::default();
+    piece_with(&mut home, "products/p1/model.glb");
+    piece_with(&mut home, "/etc/hosts");
+    let text = newera_core::to_project_json(&newera_core::Document::new(home));
+    store_bytes(&state, &project, text.as_bytes()).await;
+    let kept = stored(&state, &project).await;
+    assert_eq!(opened(&base, &cookie, &project).await, kept);
+    let logs = String::from_utf8(caught.0.lock().unwrap().clone()).unwrap();
+    assert!(
+        logs.contains("a project opens with its products' old files: "),
+        "{logs}"
+    );
+}
+
+/// A surface drawn with a finish in a variant that is not the open one is
+/// retiled too, and the open variant stays the open one.
+#[tokio::test]
+async fn a_closed_project_retiles_a_finish_in_every_variant() {
+    let Some((base, state)) = service().await else {
+        return;
+    };
+    let pictures = swatch_server().await;
+    state.links.allow_for_tests("127.0.0.1".parse().unwrap());
+    let (cookie, access, project) = drawn_project(&base, &state, "a@example.com").await;
+    stock_finishes(&state, "a@example.com", &format!("{pictures}/tile.png")).await;
+    let assigned = tool(
+        &base,
+        &access,
+        "edit_finishes",
+        json!({"action": "assign", "surface": "w1:left", "product": "tile"}),
+    )
+    .await;
+    assert_eq!(assigned["isError"], false, "{assigned}");
+    close_by_opening_another(&base, &access).await;
+    let (_, data) = stored(&state, &project).await;
+    let (drawn, inside) = newera_core::project_from_bytes(&data).unwrap();
+    let tiled = drawn.variants[0].1.clone();
+    let mut plain = tiled.clone();
+    plain.walls[0].left_side = None;
+    let two = newera_core::Project {
+        variants: vec![("Tiled".into(), tiled), ("Plain".into(), plain.clone())],
+        active: 1,
+    };
+    store_bytes(&state, &project, &bundle_of(&state, two, inside)).await;
+    let sized = said_json(
+        &tool(
+            &base,
+            &access,
+            "edit_products",
+            json!({"id": "tile", "action": "set", "fields": {"tile_width_cm": 20}}),
+        )
+        .await,
+    );
+    assert_eq!(
+        sized["drawn"],
+        "each project takes it the next time it is opened"
+    );
+
+    let (_, bytes) = opened(&base, &cookie, &project).await;
+    let (back, _) = newera_core::project_from_bytes(&bytes).unwrap();
+    assert_eq!(back.active, 1);
+    assert_eq!(
+        back.variants[0].1.walls[0].left_side,
+        Some(newera_core::Material {
+            image: Some("products/tile/finish.jpg".into()),
+            tile: Some([60.0, 20.0]),
+            ..newera_core::Material::default()
+        }),
+        "the wide picture lays the tile's 60 cm across"
+    );
+    assert_eq!(back.variants[1].1.walls, plain.walls);
 }

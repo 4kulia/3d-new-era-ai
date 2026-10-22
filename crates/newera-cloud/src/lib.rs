@@ -20,6 +20,7 @@ pub mod account;
 pub mod accounts;
 pub mod billing;
 pub mod config;
+pub mod current;
 pub mod engine;
 pub mod estimate;
 pub mod files;

@@ -622,25 +622,15 @@ async fn set(app: &AppState, account: &str, row: Row, args: &Value) -> anyhow::R
                 match crate::textures::for_swatch(db, &app.links, account, &plan, &row.id, url)
                     .await?
                 {
-                    Ok(bytes) => Some(bytes),
+                    Ok(bytes) => Some((bytes, Some(url.to_owned()))),
                     Err(why) => return Ok(refused(format!("nothing was changed: {why}"))),
                 }
             }
-            Some(_) if resized => crate::textures::kept(db, &row.id)
-                .await?
-                .map(|(bytes, _)| bytes),
+            Some(_) if resized => crate::textures::kept(db, &row.id).await?,
             _ => None,
         };
-        if let Some(bytes) = texture {
-            let tile = match newera_shop::look::appearance(&fields).look {
-                Some(newera_shop::look::Look::Picture { url, size, hangs })
-                    if Some(&url) == swatch.as_ref() =>
-                {
-                    crate::textures::dimensions(&bytes)
-                        .map(|px| crate::textures::drawn_size(size, hangs, px))
-                }
-                _ => None,
-            };
+        if let Some((bytes, basis)) = texture {
+            let tile = crate::textures::drawn_tile(&fields, basis.as_deref(), &bytes);
             drawn = Some(
                 crate::staging::swap_texture(app, account, &plan, &row.id, &bytes, tile).await?,
             );

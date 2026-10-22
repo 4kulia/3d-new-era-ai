@@ -230,7 +230,8 @@ pub async fn create(
     (status, Json(json!({"error": why}))).into_response()
 }
 
-/// A cloud project as a `.newera` file, for its owner.
+/// A cloud project as a `.newera` file, for its owner — the editor tab
+/// opening it, or a download — drawn with its products' current files.
 pub async fn download(
     State(app): State<AppState>,
     headers: HeaderMap,
@@ -250,6 +251,22 @@ pub async fn download(
     .flatten();
     match found {
         Some((name, data, revision)) => {
+            // Opened with its products' current files; the revision is the
+            // stored one, which a save from it builds on (`crate::current`).
+            let data = match crate::current::current(
+                &app.db,
+                &account.id,
+                &data,
+                &app.engine.root().join("cloud-projects"),
+            )
+            .await
+            {
+                Ok(fresh) => fresh.unwrap_or(data),
+                Err(err) => {
+                    tracing::error!("bringing a project's product files up to date: {err:#}");
+                    return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+                }
+            };
             let mut response =
                 crate::files::download(&format!("{name}.newera"), "application/zip", data);
             response

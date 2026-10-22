@@ -109,6 +109,28 @@ pub fn drawn_size(size: [f64; 2], hangs: bool, px: [u32; 2]) -> [f64; 2] {
     }
 }
 
+/// The size `[across, up]` in cm the surfaces drawn with a finish's
+/// texture take: the product's sample size (`newera_shop::look`), laid the
+/// way the texture `bytes` lies ([`drawn_size`]), when the texture was made
+/// from the swatch the product names now (`basis`, the link it was made
+/// from). `None` when the product has no sized swatch, or the texture is
+/// not of it. Every size a texture is drawn at is decided here: when a
+/// swatch or size changes (`edit_products`), and when a project is opened
+/// (`crate::current`).
+#[must_use]
+pub fn drawn_tile(
+    fields: &newera_shop::product::Fields,
+    basis: Option<&str>,
+    bytes: &[u8],
+) -> Option<[f64; 2]> {
+    match newera_shop::look::appearance(fields).look {
+        Some(newera_shop::look::Look::Picture { url, size, hangs }) if basis == Some(&*url) => {
+            dimensions(bytes).map(|px| drawn_size(size, hangs, px))
+        }
+        _ => None,
+    }
+}
+
 /// The look a surface takes from the product's texture drawn at `tile` cm,
 /// in the editor's material text.
 #[must_use]

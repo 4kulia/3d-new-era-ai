@@ -308,8 +308,9 @@ const JPEG_QUALITY: u8 = 85;
 /// Bytes stored for an asset: big JPEGs recompressed (and capped in size)
 /// when that saves at least a quarter, everything else as it is. A file
 /// already recompressed doesn't shrink enough to be touched again, so saving
-/// repeatedly doesn't wear the image down.
-fn packed_asset(name: &str, bytes: Vec<u8>) -> Vec<u8> {
+/// repeatedly doesn't wear the image down. Public so a server can tell
+/// whether a bundle holds a given file: what it holds is these bytes.
+pub fn packed_asset(name: &str, bytes: Vec<u8>) -> Vec<u8> {
     if bytes.len() < RECOMPRESS_FROM || !has_extension(name, &["jpg", "jpeg"]) {
         return bytes;
     }

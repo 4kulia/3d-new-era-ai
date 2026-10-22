@@ -22,7 +22,8 @@
 //! (`mcp.rs`). Either way they are among the project's files, and the next
 //! save carries them inside the `.newera`. A model attached later, or a
 //! finish's new swatch, replaces the file where it is open now ([`swap`],
-//! [`swap_texture`]).
+//! [`swap_texture`]), and in every other project the next time it is
+//! opened (`crate::current`).
 
 use std::time::Duration;
 
@@ -41,6 +42,10 @@ use crate::textures::Unused;
 /// of up to `models::MODEL_LIMIT` as base64. A chosen bound, not a measured
 /// one; past it the file is not in the tab.
 pub const STAGE_WAIT: Duration = Duration::from_secs(30);
+
+/// When a project that is not open takes a product's new file: the next
+/// time it is opened (`crate::current`).
+const LATER: &str = "the next time it is opened";
 
 /// A call made ready: its arguments as the editor reads them, the files to
 /// put in the project first (path inside it, bytes), and what to tell the
@@ -198,7 +203,7 @@ async fn place(
 /// What the agent is told of a product placed as a placeholder.
 fn placeholder_note(id: &str, shape: &str) -> String {
     format!(
-        "{id} has no 3D model yet: it is drawn as a placeholder ({shape}), a generated approximation stretched to the piece's box. edit_products action=attach_model gives it a model, which replaces the placeholder at once in the project open now (the editor tab, or the server's copy) and in any other project the next time the product is placed there"
+        "{id} has no 3D model yet: it is drawn as a placeholder ({shape}), a generated approximation stretched to the piece's box. edit_products action=attach_model gives it a model, which replaces the placeholder at once in the project open now (the editor tab, or the server's copy) and in any other project the next time that project is opened"
     )
 }
 
@@ -206,7 +211,7 @@ fn placeholder_note(id: &str, shape: &str) -> String {
 /// file at the product's path is replaced in the open editor tab when one
 /// holds the room and its document draws the product, else in the server's
 /// open copy of the active project when it draws the product (and saved). Any other project takes it the
-/// next time the product is placed there.
+/// next time it is opened (`crate::current`).
 ///
 /// # Errors
 ///
@@ -218,23 +223,14 @@ pub async fn swap(
     product: &str,
     bytes: &[u8],
 ) -> anyhow::Result<String> {
-    swap_file(
-        app,
-        account,
-        plan,
-        &model_path(product),
-        bytes,
-        None,
-        "the next time the product is placed there",
-    )
-    .await
+    swap_file(app, account, plan, &model_path(product), bytes, None).await
 }
 
 /// Where a finish's new texture is drawn now, for `edit_products`' answer:
 /// as [`swap`] does with a model, at the texture's path; with `tile`, the
 /// surfaces drawn with it take that size, as its new picture may lie the
-/// other way. Any other project takes it the next time `edit_finishes`
-/// puts the product on a surface there.
+/// other way. Any other project takes it, at that size, the next time it
+/// is opened (`crate::current`).
 ///
 /// # Errors
 ///
@@ -254,7 +250,6 @@ pub async fn swap_texture(
         &crate::textures::texture_path(product),
         bytes,
         tile,
-        "the next time edit_finishes puts the product on a surface there",
     )
     .await
 }
@@ -262,7 +257,7 @@ pub async fn swap_texture(
 /// Replaces the file at `path` where the open document draws with it: the
 /// editor tab holding the room, else the server's open copy (saved); with
 /// `tile`, the surfaces drawn with it take that size there. The answer says
-/// where, and that any other project takes it `later`.
+/// where, and that any other project takes it the next time it is opened.
 async fn swap_file(
     app: &AppState,
     account: &str,
@@ -270,7 +265,6 @@ async fn swap_file(
     path: &str,
     bytes: &[u8],
     tile: Option<[f64; 2]>,
-    later: &str,
 ) -> anyhow::Result<String> {
     if let Some(room) = app.rooms.owned_by(account) {
         return Ok(
@@ -283,16 +277,16 @@ async fn swap_file(
                         .as_str()
                         .unwrap_or("the tab did not resize them");
                     format!(
-                        "the picture is replaced in the open editor tab, but the surfaces drawn with it keep their size ({why}): reload the tab, then edit_finishes assign again; any other project takes it {later}"
+                        "the picture is replaced in the open editor tab, but the surfaces drawn with it keep their size ({why}): reload the tab, which opens them at their size; any other project takes it {LATER}"
                     )
                 }
                 Ok(kept) if kept["kept"] == true => {
-                    format!("in the open editor tab now; any other project takes it {later}")
+                    format!("in the open editor tab now; any other project takes it {LATER}")
                 }
                 // The tab's document does not draw the product.
-                Ok(_) => format!("each project takes it {later}"),
+                Ok(_) => format!("each project takes it {LATER}"),
                 Err(why) => {
-                    format!("not in the open editor tab ({why}); each project takes it {later}")
+                    format!("not in the open editor tab ({why}); each project takes it {LATER}")
                 }
             },
         );
@@ -303,9 +297,9 @@ async fn swap_file(
             .swap_in(&app.db, account, plan, path, bytes, tile)
             .await?
         {
-            format!("in the active project now, saved with it; any other project takes it {later}")
+            format!("in the active project now, saved with it; any other project takes it {LATER}")
         } else {
-            format!("each project takes it {later}")
+            format!("each project takes it {LATER}")
         },
     )
 }

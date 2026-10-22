@@ -334,6 +334,13 @@ impl Engine {
         })
     }
 
+    /// The engine's root: the one place this process reads files from on
+    /// disk (`newera_core::vfs::jail`).
+    #[must_use]
+    pub fn root(&self) -> &Path {
+        &self.root
+    }
+
     /// Forgets projects nobody touched for a while; they are saved already.
     ///
     /// # Panics
@@ -795,6 +802,10 @@ impl Engine {
                 .bind(account)
                 .fetch_one(db)
                 .await?;
+        // Opened with its products' current files, at the stored revision.
+        let data = crate::current::current(db, account, &data, &self.root.join("cloud-projects"))
+            .await?
+            .unwrap_or(data);
         let dir = self.root.join("cloud-projects").join(secret::id());
         tokio::fs::create_dir_all(&dir).await?;
         let file = dir.join("project.newera");
@@ -829,7 +840,7 @@ impl Engine {
     /// a placeholder, or a finish's new texture — with `tile`, the size the
     /// surfaces drawn with it take, in every variant (`newera_core::finishes::retile`). False when no copy is open, none of it uses the file,
     /// or the project changed meanwhile (it then takes the file the next
-    /// time the product is placed there).
+    /// time it is opened, `crate::current`).
     ///
     /// # Errors
     ///
