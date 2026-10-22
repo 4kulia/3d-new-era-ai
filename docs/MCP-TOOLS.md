@@ -92,14 +92,17 @@ The same tools reach agents three ways: the desktop (the window, `newera serve`,
 `newera mcp`), a browser tab through the relay, and the hosted service.
 [`src/surface.rs`](../crates/newera-mcp/src/surface.rs) is the one place that says what
 each offers (`Transport::offers`), what a tool means there when that differs (a save in a
-tab is a download), and the server instructions each gives. A place offers a tool only when
-it can run it: the ones that need the person's own disk or programs (`DESKTOP_ONLY`) are
-neither listed nor accepted in a tab or the hosted service. A new tool is offered everywhere
-unless it goes on that list, and needs a category in the instructions' map
+tab is a download), and the server instructions each gives — the hosted service's naming
+the editor its configuration gives (`hosted_instructions`, from `NEWERA_EDITOR_URL`) and
+how its shop tools work with the editor's. A place offers a tool only when it can run it:
+the ones that need the person's own disk or programs (`DESKTOP_ONLY`) are neither listed
+nor accepted in a tab or the hosted service. A new tool is offered everywhere unless it
+goes on that list, and needs a category in the instructions' map
 (`every_offered_tool_is_in_one_category`).
 
-The hosted service also answers tools of its own from its database — the account's
-projects and its library of shop products (`HOSTED_ONLY`). They are defined in
+The hosted service also answers tools of its own from its database — the account's projects
+(`projects`), its library of shop products (`import_product`, `products`, `edit_products`)
+and the priced estimate (`estimate`, `edit_estimate`): `HOSTED_ONLY`. They are defined in
 [`src/hosted.rs`](../crates/newera-mcp/src/hosted.rs) and pass the same rules as every
 other tool (hints, output schema, budget, search, names), but only the hosted service
 offers them and runs them: [`crate::call`](../crates/newera-mcp/src/lib.rs) never does, and

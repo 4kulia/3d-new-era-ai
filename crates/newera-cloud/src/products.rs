@@ -645,6 +645,7 @@ async fn set(app: &AppState, account: &str, row: Row, args: &Value) -> anyhow::R
     if given.contains_key("price") {
         remember_price(db, &row.id, &fields).await?;
     }
+    let note = model_after_set(app, account, &row, kind, &fields, given).await?;
     let row = Row {
         fields: Json(fields),
         kind: kind.as_str().to_owned(),
@@ -654,7 +655,65 @@ async fn set(app: &AppState, account: &str, row: Row, args: &Value) -> anyhow::R
     if let Some(drawn) = drawn {
         answer["drawn"] = json!(drawn);
     }
+    if let Some(note) = note {
+        answer["note"] = json!(note);
+    }
     Ok(said(&answer))
+}
+
+/// What a set leaves a size changed to, once a generated model is kept.
+pub const RESIZED_MODEL: &str = "its generated 3D model stays as it was made: edit_products action=generate remakes it at the new size";
+
+/// What a set leaves a size changed to while the model is being made from
+/// the size the generator was sent.
+pub const RESIZED_WHILE_MADE: &str = "the 3D model being made uses the size it was sent with: edit_products action=generate, once it is done, remakes it at the new size";
+
+/// A piece's model after a `set` gave it `fields`: the set that completes
+/// its photo and size, while it has no model of its own, has the model made,
+/// as an import with them does; a new size for a model already generated,
+/// or already sent to the generator, leaves that model, and says so.
+async fn model_after_set(
+    app: &AppState,
+    account: &str,
+    before: &Row,
+    kind: Kind,
+    fields: &Fields,
+    given: &serde_json::Map<String, Value>,
+) -> anyhow::Result<Option<&'static str>> {
+    if kind != Kind::Furniture {
+        return Ok(None);
+    }
+    let model: Option<String> = sqlx::query_scalar(
+        "select source from product_assets where product_id = $1 and kind = 'model'",
+    )
+    .bind(&before.id)
+    .fetch_optional(&app.db)
+    .await?;
+    let resized = crate::models::dimensions(&before.fields) != crate::models::dimensions(fields);
+    let own_model = model
+        .as_deref()
+        .is_some_and(|source| source != "placeholder");
+    let sent: bool = sqlx::query_scalar(
+        "select exists (select 1 from product_jobs where product_id = $1
+                          and status in ('queued', 'running') and provider_job is not null)",
+    )
+    .bind(&before.id)
+    .fetch_one(&app.db)
+    .await?;
+    if resized && sent {
+        return Ok(Some(RESIZED_WHILE_MADE));
+    }
+    let inputs = resized || given.contains_key("image") || given.contains_key("kind");
+    if !own_model
+        && inputs
+        && app.config.generator.is_some()
+        && crate::generation::photo(fields).is_some()
+        && crate::generation::size(fields).is_some()
+    {
+        crate::generation::enqueue(app, account, &before.id).await?;
+        return Ok(None);
+    }
+    Ok((resized && model.as_deref() == Some("generated")).then_some(RESIZED_MODEL))
 }
 
 /// What a refresh takes from the shop: the commercial fields. The rest of

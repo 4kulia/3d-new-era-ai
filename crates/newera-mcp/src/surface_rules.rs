@@ -53,12 +53,23 @@ fn is_read(tool: &Value) -> bool {
     tool["annotations"]["readOnlyHint"].as_bool() == Some(true)
 }
 
-fn instructions() -> String {
+/// The server instructions as the desktop hands them out, and as the hosted
+/// service does: the words every description rule holds them to.
+fn instructions() -> Vec<(String, String)> {
     use rmcp::ServerHandler as _;
     let server = crate::NewEraMcp::new(newera_core::SharedDocument::new(
         newera_core::Document::default(),
     ));
-    server.get_info().instructions.unwrap_or_default()
+    vec![
+        (
+            "instructions".to_owned(),
+            server.get_info().instructions.unwrap_or_default(),
+        ),
+        (
+            "hosted instructions".to_owned(),
+            crate::surface::instructions(crate::Transport::Cloud),
+        ),
+    ]
 }
 
 /// Every `description` in a schema, with where it sits.
@@ -333,7 +344,7 @@ fn descriptions_name_tools_that_exist() {
     }
     let word = regex_lite::Regex::new(r"\b[a-z][a-z0-9]*(?:_[a-z0-9]+)+\b").expect("regex");
     let bare = regex_lite::Regex::new(r"\b[a-z][a-z0-9_]*\b").expect("regex");
-    let mut texts: Vec<(String, String)> = vec![("instructions".to_owned(), instructions())];
+    let mut texts: Vec<(String, String)> = instructions();
     for (name, tool) in &tools {
         let mut found = Vec::new();
         descriptions(tool, name, &mut found);
@@ -384,7 +395,7 @@ const BANNED: &[&str] = &[
 #[test]
 fn descriptions_neither_order_nor_sell() {
     let tools = surface();
-    let mut texts: Vec<(String, String)> = vec![("instructions".to_owned(), instructions())];
+    let mut texts: Vec<(String, String)> = instructions();
     for (name, tool) in &tools {
         let mut found = Vec::new();
         descriptions(tool, name, &mut found);

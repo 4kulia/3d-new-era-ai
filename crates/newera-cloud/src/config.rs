@@ -368,7 +368,8 @@ pub struct Config {
     pub site_origins: Vec<String>,
     pub mail: Mail,
     pub google: Option<Google>,
-    /// The browser editor, where "open in the editor" goes.
+    /// The browser editor, where "open in the editor" goes and where the
+    /// server instructions tell agents the person's open editor is.
     pub editor_url: String,
     /// The paid plan, supported through Buy Me a Coffee; `None` leaves every
     /// account on the free plan and the account page without a way to pay.
@@ -451,7 +452,7 @@ impl Config {
             _ => None,
         };
         let editor_url =
-            var("NEWERA_EDITOR_URL").unwrap_or_else(|| "https://3dneweraai.com/app/".to_owned());
+            var("NEWERA_EDITOR_URL").unwrap_or_else(|| newera_mcp::output::EDITOR_URL.to_owned());
         let buymeacoffee = BuyMeACoffee::from_env(&var)?;
         let allowed_emails = AllowedEmails::from_var(std::env::var("NEWERA_ALLOWED_EMAILS"))?;
         let anysite = var("ANYSITE_API_KEY").map(|key| {

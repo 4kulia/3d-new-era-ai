@@ -349,7 +349,7 @@ impl NewEraMcp {
             "name": home.name,
             "svg": svg,
             "summary": summary,
-            "editor": "https://3dneweraai.com/app/",
+            "editor": crate::output::EDITOR_URL,
         }));
         result
     }

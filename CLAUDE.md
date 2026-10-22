@@ -4,9 +4,9 @@ Fork of `leandrodaf/3d-new-era-ai` (remote `upstream`), extended with shop-produ
 estimates. Upstream's own rules are in `CONTRIBUTING.md` and `docs/`.
 
 - The plan in `docs/SHOP-IMPORT-PLAN.md` is approved and carried out step after step without
-  waiting for the operator: each reviewed step is committed and pushed to `main`, and the
-  pipeline deploys it to interioragent.dutch-atlas.com; questions go out as chat text while work
-  that does not depend on them continues.
+  waiting for the operator: each reviewed step, with README.md's section on this fork brought up
+  to date, is pushed to `main` and deployed to interioragent.dutch-atlas.com; questions go out as
+  chat text while independent work continues.
 - interioragent.dutch-atlas.com is the operator's working instance, not production, though the
   deploy workflow calls it `production`: for it alone the canon's «Production» approval is set
   aside, and changes for the work in hand (container files, /opt/interioragent config) need no

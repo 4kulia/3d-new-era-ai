@@ -1,8 +1,8 @@
 //! The fixed MCP address, `/mcp`: the same for everyone, and each AI client
 //! acts for the account its token belongs to.
 //!
-//! A call goes to that account's tab — the editor at 3dneweraai.com/app,
-//! signed in — through the relay; renders run on the server all the same,
+//! A call goes to that account's tab — the editor at the configured
+//! `editor_url`, signed in — through the relay; renders run on the server all the same,
 //! after the tab has saved. The handshake, the tool list and the pages are
 //! answered here, so a client can connect before the tab is open.
 
@@ -140,7 +140,7 @@ async fn answer(
                         "websiteUrl": newera_mcp::output::WEBSITE,
                         "icons": newera_mcp::output::icons(),
                     },
-                    "instructions": newera_mcp::surface::instructions(newera_mcp::Transport::Cloud),
+                    "instructions": newera_mcp::surface::hosted_instructions(&app.config.editor_url),
                 }),
             ))
         }
@@ -257,6 +257,16 @@ async fn answer(
                 if let Some(result) = answer.as_mut().and_then(|a| a.get_mut("result")) {
                     newera_mcp::output::structure_json(result);
                     add_notes(result, &notes);
+                    // "Open in the editor" is this deployment's editor, which
+                    // the tab's own build cannot know.
+                    if name == "show_plan"
+                        && let Some(fields) = result
+                            .get_mut("structuredContent")
+                            .and_then(Value::as_object_mut)
+                        && fields.contains_key("editor")
+                    {
+                        fields.insert("editor".to_owned(), json!(app.config.editor_url));
+                    }
                 }
                 return answer;
             }
@@ -448,7 +458,7 @@ mod tests {
     /// names and these words.
     #[test]
     fn the_instructions_name_every_hosted_tool() {
-        let said = newera_mcp::surface::instructions(newera_mcp::Transport::Cloud);
+        let said = newera_mcp::surface::hosted_instructions("https://interior.example/app/");
         for tool in hosted_tools() {
             let name = tool["name"].as_str().unwrap();
             assert!(

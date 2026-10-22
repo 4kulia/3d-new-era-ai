@@ -27,6 +27,10 @@ pub const DESCRIPTION: &str =
 /// Where people read about it.
 pub const WEBSITE: &str = "https://3dneweraai.com";
 
+/// The browser editor an answer links to when nothing says another: the
+/// project's own site. A hosted service names its own (`NEWERA_EDITOR_URL`).
+pub const EDITOR_URL: &str = "https://3dneweraai.com/app/";
+
 /// The server's icons, as the site serves them.
 #[must_use]
 pub fn icons() -> Vec<rmcp::model::Icon> {
@@ -1132,6 +1136,10 @@ pub(crate) fn schema(name: &str) -> Option<Value> {
         "edit_products" => {
             let mut fields = product_fields();
             fields.push(("removed", flag("The product was deleted")));
+            fields.push((
+                "note",
+                text("For set: what the change leaves as it was, e.g. a generated model made at the old size"),
+            ));
             fields.push((
                 "drawn",
                 text("For attach_model, or set of a finish's swatch or size: where the new file is drawn already, and where it waits for the product's next use"),

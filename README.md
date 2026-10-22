@@ -18,6 +18,68 @@ Portuguese, Spanish and French.
 
 ![Editor with a furnished 105 m² apartment: catalog, rendered floor plan and live 3D view](docs/images/editor.png)
 
+## InteriorAgent (this fork)
+
+This repository is a fork of [3D New Era AI](https://github.com/leandrodaf/3d-new-era-ai)
+that turns real shop products into a furnished, finished and priced interior, all over MCP.
+An agent imports furniture and finishes from shop links, places them in the plan as 3D
+models at the shop's size, puts tiles, laminate, paint and wallpaper on the surfaces, renders
+photos and produces a priced estimate. It is hosted at
+**<https://interioragent.dutch-atlas.com>**: one person's instance, signed in with Google and
+open only to the owner's address. The rest of this README is upstream's, marked where this
+fork adds to it: its site, downloads and hosted connector are upstream's own.
+
+What it does now:
+
+- **Product import from a shop link** (`import_product`), through [AnySite](https://anysite.io):
+  IKEA through its product adapter; any other shop's page is parsed first and rendered in a
+  browser only when the parse left out what the product needs. Each field records where it
+  came from, and what no page showed is listed as missing for the agent to fill
+  (`edit_products`). The same article imported again is the one kept.
+- **A product library in the server's database**, with price history (`refresh` reads
+  today's price and VAT again).
+- **3D models generated on a GPU server** (Hunyuan3D-2.0) from the product photo, scaled to
+  the shop's width, depth and height: about two minutes per piece. A placed piece shows a
+  placeholder until its model is ready, then the model replaces it; a failed or unreachable
+  generation is tried up to five times in all, with growing waits between tries.
+- **Finishes that look like the product**: a finish on a whole floor, ceiling or wall side is
+  drawn with its swatch picture tiled at its real size, or a paint's colour. A band of a wall
+  (tile below, paint above) counts for purchase only.
+- **Takeoff and a priced estimate**: m² per surface with doors and windows deducted, packs,
+  cans and rolls with waste and coats, furniture by the piece, lines of your own (labour,
+  delivery), totals per shop, currency and VAT basis, saved estimates, and a CSV download.
+- **Photos on the server**: renders always run on the server, after an open editor saves its
+  changes. `render_photo` uses Blender Cycles on the GPU server when it answers, and the
+  built-in path tracer otherwise.
+- **Server projects in the web editor**: the editor at
+  <https://interioragent.dutch-atlas.com/app/> opens the account's projects, saves them
+  automatically and refuses a save over a newer revision. A project opened again draws its
+  products' current models and finishes.
+
+### Connect ChatGPT or Claude
+
+In Claude or ChatGPT, add a custom connector with the address
+**`https://interioragent.dutch-atlas.com/mcp`**. The client discovers the OAuth sign-in by
+itself; sign in with the owner's Google account and allow the client. With the editor open
+and signed in, the agent's changes appear there live; otherwise it works on the account's
+active project on the server.
+
+### How an agent works with it
+
+1. `import_product {url}` for each piece and finish; `products` shows what is missing.
+2. `edit_products set` fills it: `width_cm`, `depth_cm`, `height_cm` for a piece (all three
+   are needed for its model), `finish_type` (`covering`, `paint`, `wallpaper`), `swatch_image`
+   with its tile or roll size, or `colour_hex`. The set that completes a piece's photo and
+   size starts its model; `edit_products generate` remakes it, e.g. at a new size.
+3. `place model=product:<id>` puts the piece in the plan.
+4. `edit_finishes assign {surface, product}` covers a floor, ceiling or wall side.
+5. `takeoff` measures, `estimate` prices (`format=csv` for a sheet), `edit_estimate` adds
+   lines and saves.
+6. `render_photo` (`quality`, `max_s`) for the picture.
+
+The full tool list is under [MCP tools](#mcp-tools); how tools are designed and checked is in
+[docs/MCP-TOOLS.md](docs/MCP-TOOLS.md).
+
 ## Three ways to use it
 
 | | What you get | Account |
@@ -268,6 +330,7 @@ run it without asking, and asks before each change.
 | `levels` / `cameras` / `variants` / `video` | Storeys, points of view, plan versions and camera-path videos, each changed through its `edit_*` tool |
 | `render_plan` / `show_plan` | PNG of the plan as the user sees it; the plan inside the chat as an interactive viewer (MCP Apps) |
 | `render_3d` / `render_photo` | Software 3D views (aerial, visitor, cameras, elevations, sections); path-traced photos with sun and lamps |
+| `finishes` / `edit_finishes` / `takeoff` | Which shop product covers which floor, ceiling or wall side, and the quantities an estimate needs (this fork) |
 | `export` | PDF, SVG or PNG plan; GLB or OBJ model; the cut list as CSV or DXF/SVG sheets |
 | `file` | New, open and save: projects (`.newera`) and Sweet Home 3D import (`.sh3d`) |
 | `edit_history` / `history` | Undo and redo, shared with the user, and named checkpoints to come back to |
@@ -275,7 +338,9 @@ run it without asking, and asks before each change.
 | `feedback` | A note to the developers about what a tool could do better (desktop only) |
 
 The hosted connector adds `projects`, to list and switch between the projects in your
-account, and leaves out `feedback`, the plugin tools and `library` / `edit_library` (the
+account, and, in this fork, `import_product`, `products` and `edit_products` for the shop
+product library and `estimate` and `edit_estimate` for the priced estimate; it leaves out
+`feedback`, the plugin tools and `library` / `edit_library` (the
 library is a folder on your machine), which only make sense on your own machine; the
 browser tab leaves out the library tools too.
 

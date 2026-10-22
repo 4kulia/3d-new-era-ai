@@ -489,6 +489,13 @@ async fn an_ai_client_is_allowed_in_and_reaches_the_tab() {
     .await;
     assert_eq!(status, 200);
     assert_eq!(hello["result"]["protocolVersion"], "2025-06-18");
+    // The agent is told where the person's editor is: this deployment's.
+    let said = hello["result"]["instructions"].as_str().unwrap();
+    assert!(
+        said.contains(&format!("the editor open at {SITE}/editor/ and signed in")),
+        "{said}"
+    );
+    assert!(!said.contains("3dneweraai"), "{said}");
     let (_, list) = mcp(
         &base,
         &access,
@@ -767,6 +774,39 @@ async fn an_ai_client_is_allowed_in_and_reaches_the_tab() {
         .unwrap();
     let (_, answered) = calling.await.unwrap();
     assert_eq!(answered["result"]["content"][0]["text"], "w1");
+
+    // The plan the tab shows opens in this deployment's editor, whatever
+    // link the tab's own build gave.
+    let calling = tokio::spawn({
+        let (base, access) = (base.clone(), access.clone());
+        async move {
+            mcp(
+                &base,
+                &access,
+                json!({"jsonrpc": "2.0", "id": 8, "method": "tools/call", "params": {"name": "show_plan", "arguments": {}}}),
+            )
+            .await
+        }
+    });
+    let work = loop {
+        let message = socket.next().await.unwrap().unwrap();
+        let value: Value = serde_json::from_str(message.to_text().unwrap()).unwrap();
+        if value["type"] == "call" {
+            break value;
+        }
+    };
+    assert_eq!(work["name"], "show_plan");
+    let shown = json!({"name": "Casa", "svg": "<svg/>", "summary": {"rooms": 0}, "editor": "https://3dneweraai.com/app/"});
+    socket
+        .send(tokio_tungstenite::tungstenite::Message::text(
+            json!({"type": "result", "id": work["id"], "ok": true, "result": {"content": [{"type": "text", "text": "shown"}], "structuredContent": shown}}).to_string(),
+        ))
+        .await
+        .unwrap();
+    let (_, answered) = calling.await.unwrap();
+    let mut expected = shown;
+    expected["editor"] = json!(format!("{SITE}/editor/"));
+    assert_eq!(answered["result"]["structuredContent"], expected);
 
     // Refresh rotates; the old refresh token used again revokes the family.
     let rotated: Value = http
@@ -6224,6 +6264,156 @@ async fn kept_model(state: &AppState, id: &str) -> (String, Option<String>, Vec<
     .fetch_one(&state.db)
     .await
     .unwrap()
+}
+
+/// A size changed while the model is being made leaves that job as it was
+/// sent, and says so: the model comes at the old size until generate remakes
+/// it. No second job is put in.
+#[tokio::test]
+async fn a_size_changed_while_the_model_is_made_says_it_comes_at_the_old_one() {
+    let (stand_in, url) = generator_up(vec![Said::Running]).await;
+    let (anysite, _) = anysite(SHOPS).await;
+    let Some((base, state)) =
+        generating_service(&url, std::time::Duration::from_millis(100), Some(anysite)).await
+    else {
+        return;
+    };
+    let (_, access, _) = credentials(&base, &state, "buyer@example.com").await;
+    let link = "https://www.ikea.com/nl/nl/p/billy-boekenkast-wit-00263850/";
+    let imported = fields_of(&tool(&base, &access, "import_product", json!({"url": link})).await);
+    let id = imported["id"].as_str().unwrap().to_owned();
+    let worker = newera_cloud::generation::start(state.clone()).expect("a generator");
+    let running = job_when(&base, &access, &id, |j| j["status"] == "running").await;
+    assert_eq!(stand_in.asked().len(), 1);
+
+    let resized = fields_of(
+        &tool(
+            &base,
+            &access,
+            "edit_products",
+            json!({"id": id, "action": "set", "fields": {"width_cm": 90}}),
+        )
+        .await,
+    );
+    worker.abort();
+    assert_eq!(resized["job"]["id"], running["id"], "{resized}");
+    assert_eq!(
+        resized["note"],
+        "the 3D model being made uses the size it was sent with: edit_products action=generate, once it is done, remakes it at the new size"
+    );
+    let jobs: i64 = sqlx::query_scalar("select count(*) from product_jobs")
+        .fetch_one(&state.db)
+        .await
+        .unwrap();
+    assert_eq!(jobs, 1);
+}
+
+/// A piece imported without its size has no job: there is nothing to make a
+/// model at. The `set` that completes the size puts one in, as the import
+/// would have, and the answer carries it; setting the size again while it is
+/// open brings that job, not a second. Once its generated model is kept, a
+/// new size leaves that model as it is and says how to remake it.
+#[tokio::test]
+async fn a_piece_given_its_size_later_has_its_model_made() {
+    let (stand_in, url) = generator_up(vec![Said::Model(generated_glb())]).await;
+    let fixtures =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../newera-shop/tests/fixtures");
+    let mut record: Value = serde_json::from_str(
+        &std::fs::read_to_string(fixtures.join("ikea_billy_00263850.json")).unwrap(),
+    )
+    .unwrap();
+    let item = &mut record["body"][0];
+    item["measurements"] = json!([]);
+    item["reference_measurements"] = json!([]);
+    item["measure_text"] = json!("");
+    let (anysite, _) = anysite_of(
+        vec![("ikea/products".to_owned(), "ikea.com".to_owned(), record)],
+        std::time::Duration::ZERO,
+    )
+    .await;
+    let Some((base, state)) =
+        generating_service(&url, std::time::Duration::from_millis(100), Some(anysite)).await
+    else {
+        return;
+    };
+    let (_, access, _) = credentials(&base, &state, "buyer@example.com").await;
+    let jobs = |db: sqlx::PgPool| async move {
+        sqlx::query_scalar::<_, i64>("select count(*) from product_jobs")
+            .fetch_one(&db)
+            .await
+            .unwrap()
+    };
+    let link = "https://www.ikea.com/nl/nl/p/billy-boekenkast-wit-00263850/";
+    let imported = fields_of(&tool(&base, &access, "import_product", json!({"url": link})).await);
+    let id = imported["id"].as_str().unwrap().to_owned();
+    assert!(
+        imported["fields"]["image"]["value"].is_string(),
+        "{imported}"
+    );
+    for size in ["width_cm", "depth_cm", "height_cm"] {
+        assert!(
+            imported["missing"]
+                .as_array()
+                .unwrap()
+                .contains(&json!(size)),
+            "{imported}"
+        );
+    }
+    assert_eq!(imported.get("job"), None, "{imported}");
+    assert_eq!(jobs(state.db.clone()).await, 0);
+
+    let set = |fields: Value| {
+        let (base, access, id) = (base.clone(), access.clone(), id.clone());
+        async move {
+            fields_of(
+                &tool(
+                    &base,
+                    &access,
+                    "edit_products",
+                    json!({"id": id, "action": "set", "fields": fields}),
+                )
+                .await,
+            )
+        }
+    };
+    let partial = set(json!({"width_cm": 80, "depth_cm": 28})).await;
+    assert_eq!(partial.get("job"), None, "{partial}");
+    assert_eq!(jobs(state.db.clone()).await, 0);
+
+    let sized = set(json!({"height_cm": 202})).await;
+    let job = sized["job"].clone();
+    assert_eq!(
+        job,
+        json!({"id": job["id"], "status": "queued", "attempts": 0, "updated": job["updated"]}),
+        "{sized}"
+    );
+    assert_eq!(sized.get("note"), None, "{sized}");
+    let again = set(json!({"height_cm": 201})).await;
+    assert_eq!(again["job"], job, "{again}");
+    assert_eq!(jobs(state.db.clone()).await, 1);
+
+    let worker = newera_cloud::generation::start(state.clone()).expect("a generator");
+    let done = job_when(&base, &access, &id, |j| j["status"] == "done").await;
+    worker.abort();
+    assert_eq!(
+        stand_in.asked(),
+        [json!({
+            "image_url": "https://www.ikea.com/nl/nl/images/products/billy-boekenkast-wit__1590272_pe1038911_s5.jpg",
+            "size_cm": [80.0, 28.0, 201.0],
+        })]
+    );
+    assert_eq!(kept_model(&state, &id).await.0, "generated");
+
+    let priced = set(json!({"price": "59.99"})).await;
+    assert_eq!(priced.get("note"), None, "{priced}");
+    let resized = set(json!({"width_cm": 90})).await;
+    assert_eq!(resized["job"], done, "{resized}");
+    assert_eq!(
+        resized["note"],
+        "its generated 3D model stays as it was made: edit_products action=generate remakes it at the new size"
+    );
+    assert_eq!(jobs(state.db.clone()).await, 1);
+    assert_eq!(kept_model(&state, &id).await.0, "generated");
 }
 
 /// An imported piece with a photo has a job: the worker hands the photo and

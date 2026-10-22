@@ -66,7 +66,7 @@ impl Transport {
                 "Start or keep the project in this browser tab. new: an empty project in place of this one. save {path?}: downloads a .newera backup; path supplies a filename only; reports download_started (not disk confirmation) and autosave recovery status, and no server file is written. open reads files on a desktop only.",
             ),
             (Self::Cloud, "file") => Some(
-                "Start, open or keep the account's projects. new {name?}: a new, empty floor plan project, made the active one. open {path}: one of the account's projects by name (projects lists them), made the active one. save {path?}: keeps the active project now — it is also kept after every change; path renames it. With the editor open and signed in at 3dneweraai.com/app, calls reach that tab instead: save downloads a .newera backup there, and open reads files on a desktop only.",
+                "Start, open or keep the account's projects. new {name?}: a new, empty floor plan project, made the active one. open {path}: one of the account's projects by name (projects lists them), made the active one. save {path?}: keeps the active project now — it is also kept after every change; path renames it. With the person's editor open and signed in, calls reach that tab instead: save downloads a .newera backup there, and open reads files on a desktop only.",
             ),
             (Self::Cloud, "export") => Some(
                 "Export the active project to a file, by the extension of path. what=plan (default): .pdf (A3; scale=50/100 or fit), .svg or .png, or the 3D model as .glb or .obj. what=cut_list: the joinery's cut list as .csv, or .dxf/.svg sheets. Reply: a link to the file, good for a day.",
@@ -217,24 +217,53 @@ const CATEGORIES: &[(&str, &[&str])] = &[
     ("extras", &["plugins", "run_plugin", "feedback"]),
 ];
 
-/// What the server tells an agent about itself, as this place says it.
+/// What the server tells an agent about itself, as this place says it; the
+/// hosted service's, with the project's own editor ([`hosted_instructions`]
+/// names another).
 #[must_use]
 pub fn instructions(transport: Transport) -> String {
-    let intro = match transport {
-        Transport::Native => "Home design editor, live in the user's window.",
+    said(transport, crate::output::EDITOR_URL)
+}
+
+/// What the hosted service tells an agent, with the person's editor at
+/// `editor_url`: the service's own, which its configuration names.
+#[must_use]
+pub fn hosted_instructions(editor_url: &str) -> String {
+    said(Transport::Cloud, editor_url)
+}
+
+/// How the hosted service's own tools work with the editor's, from a shop
+/// link to the photo and the estimate.
+const SHOP_WORKFLOW: &str = " Shop products: import_product {url} adds a piece or a finish to the \
+library with what the shop shows; products shows what is missing, and edit_products set fills it \
+(width_cm, depth_cm, height_cm; finish_type covering, paint or wallpaper; swatch_image with its \
+tile or roll size, or colour_hex). A piece with a picture and all three sizes gets a 3D model made \
+on the server (edit_products generate remakes it, at a new size too); place model=product:<id> \
+draws a placeholder until that model is ready, then swaps it in. edit_finishes assign {surface, \
+product} on a whole floor, ceiling or wall side draws the product's look (its swatch at real size, \
+or its colour); a band only counts it for purchase. takeoff measures the m², estimate prices every \
+product used, with VAT (format=csv: a sheet), edit_estimate adds lines (labour, delivery) and \
+saves. render_photo runs on the server's GPU renderer when it answers, the built-in one otherwise; \
+quality and max_s bound it.";
+
+fn said(transport: Transport, editor_url: &str) -> String {
+    let intro: std::borrow::Cow<'static, str> = match transport {
+        Transport::Native => "Home design editor, live in the user's window.".into(),
         Transport::Browser => {
             "Home design editor running in someone's browser tab, reached through a relay. \
              Everything you change appears on their screen as you do it and can be undone with \
              Ctrl+Z. The project lives in that tab: it is not saved anywhere here, and closing \
              the tab ends the session."
+                .into()
         }
-        Transport::Cloud => {
+        Transport::Cloud => format!(
             "Home design editor (3D New Era AI), acting for the signed-in account. When the \
-             person has the editor open at 3dneweraai.com/app and signed in, calls reach it and \
-             every change appears there; otherwise they work on the account's active project in \
-             the cloud, kept after every change (projects lists them). Renders always run here, \
-             on the active project, after the open editor saves its changes."
-        }
+                 person has the editor open at {editor_url} and signed in, calls reach it and \
+                 every change appears there; otherwise they work on the account's active project \
+                 in the cloud, kept after every change (projects lists them). Renders always run \
+                 here, on the active project, after the open editor saves its changes."
+        )
+        .into(),
     };
     let map: Vec<String> = CATEGORIES
         .iter()
@@ -265,6 +294,9 @@ several plan versions; tools act on the active one. Finishes are short strings: 
 pattern like `tiles #ffffff 60x60 r45` (tint, tile cm, rotation) or `img:path 90x90`; `none` clears.",
         map.join("; ")
     );
+    if transport == Transport::Cloud {
+        text.push_str(SHOP_WORKFLOW);
+    }
     if transport.offers("feedback") {
         text.push_str(
             " When a tool answers less than you asked, makes you take a detour, or leads you to a \
@@ -278,7 +310,10 @@ not get worse) — then carry on.",
 
 #[cfg(test)]
 mod tests {
-    use super::{CATEGORIES, DESKTOP_ONLY, HOSTED_ONLY, Transport, instructions, tools};
+    use super::{
+        CATEGORIES, DESKTOP_ONLY, HOSTED_ONLY, SHOP_WORKFLOW, Transport, hosted_instructions,
+        instructions, tools,
+    };
 
     const ALL: [Transport; 3] = [Transport::Native, Transport::Browser, Transport::Cloud];
 
@@ -364,6 +399,35 @@ mod tests {
             assert!(
                 listed.iter().any(|t| t["name"] == name),
                 "Cloud leaves out {name}"
+            );
+        }
+    }
+
+    /// The hosted service names the editor its configuration gives, and no
+    /// other: neither its instructions nor a tool it lists sends the person
+    /// to the project's own site. The shop workflow is told there alone.
+    #[test]
+    fn the_hosted_service_names_its_own_editor() {
+        let editor = "https://interior.example/app/";
+        let said = hosted_instructions(editor);
+        assert!(
+            said.contains(&format!("the editor open at {editor} and signed in")),
+            "{said}"
+        );
+        assert!(!said.contains("3dneweraai"), "{said}");
+        assert!(said.ends_with(SHOP_WORKFLOW), "{said}");
+        assert_eq!(
+            instructions(Transport::Cloud),
+            hosted_instructions(crate::output::EDITOR_URL)
+        );
+        for tool in tools(Transport::Cloud) {
+            let listed = tool.to_string();
+            assert!(!listed.contains("3dneweraai"), "{}", tool["name"]);
+        }
+        for transport in [Transport::Native, Transport::Browser] {
+            assert!(
+                !instructions(transport).contains(SHOP_WORKFLOW),
+                "{transport:?}"
             );
         }
     }
