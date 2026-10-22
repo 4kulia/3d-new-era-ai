@@ -6180,6 +6180,26 @@ async fn job_when(base: &str, access: &str, id: &str, reached: impl Fn(&Value) -
     );
 }
 
+/// The product's model inside the stored project. A job is done when its
+/// model is kept; the swap into the project follows it, so this waits for
+/// the project to hold `want`, and returns what it holds if it never does.
+async fn model_drawn_in(state: &AppState, project: &str, want: &[u8]) -> Option<Vec<u8>> {
+    let mut file = None;
+    for _ in 0..750 {
+        let (_, bytes) = stored(state, project).await;
+        let (_, inside) = newera_core::project_from_bytes(&bytes).unwrap();
+        file = inside
+            .iter()
+            .find(|(name, _)| name == "products/p1/model.glb")
+            .map(|(_, data)| data.clone());
+        if file.as_deref() == Some(want) {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    file
+}
+
 async fn kept_model(state: &AppState, id: &str) -> (String, Option<String>, Vec<u8>) {
     sqlx::query_as(
         "select source, generator, data from product_assets where product_id = $1 and kind = 'model'",
@@ -6515,12 +6535,7 @@ async fn a_generated_model_replaces_the_placeholder_in_the_open_project() {
         (kept.0.as_str(), kept.1.as_deref()),
         ("generated", Some("hunyuan3d-2.0-m"))
     );
-    let (_, bytes) = stored(&state, &project).await;
-    let (_, inside) = newera_core::project_from_bytes(&bytes).unwrap();
-    let file = inside
-        .iter()
-        .find(|(name, _)| name == "products/p1/model.glb")
-        .map(|(_, data)| data.clone());
+    let file = model_drawn_in(&state, &project, &generated_glb()).await;
     assert_eq!(
         file,
         Some(generated_glb()),
@@ -6845,12 +6860,7 @@ async fn a_job_whose_model_was_kept_before_a_restart_ends_done() {
         done,
         json!({"id": "j1", "status": "done", "attempts": 0, "updated": done["updated"]})
     );
-    let (_, bytes) = stored(&state, &project).await;
-    let (_, inside) = newera_core::project_from_bytes(&bytes).unwrap();
-    let file = inside
-        .iter()
-        .find(|(name, _)| name == "products/p1/model.glb")
-        .map(|(_, data)| data.clone());
+    let file = model_drawn_in(&state, &project, &generated_glb()).await;
     assert_eq!(file, Some(generated_glb()), "drawn where the product is");
 }
 
