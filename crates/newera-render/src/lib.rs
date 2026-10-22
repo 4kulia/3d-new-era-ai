@@ -420,26 +420,28 @@ pub fn export_home(
     let models = |piece: &newera_core::Furniture| cache.piece_model(piece, assets);
     let mut mesh = Mesh::from_home(home, &Selection::new(), &models);
     mesh.drop_ground();
-    let images = |file: &str| {
-        let path = newera_core::resolve_asset(assets, file);
-        let bytes = newera_core::vfs::read(&path).ok()?;
-        let ext = path
-            .extension()
-            .and_then(|e| e.to_str())
-            .map_or_else(|| "png".to_owned(), str::to_ascii_lowercase);
-        // Formats other than PNG/JPEG are converted to PNG.
-        if matches!(ext.as_str(), "png" | "jpg" | "jpeg") {
-            Some((bytes, ext))
-        } else {
-            let image = newera_core::images::decode(&bytes).ok()?;
-            let mut png = Vec::new();
-            image
-                .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
-                .ok()?;
-            Some((png, "png".to_owned()))
-        }
-    };
-    export::export_mesh(&mesh, path, &images)
+    export::export_mesh(&mesh, path, &|file| export_image(assets, file))
+}
+
+/// An image a mesh's material names, as an export embeds it: PNG and JPEG
+/// as they are, other formats converted to PNG.
+fn export_image(assets: Option<&Path>, file: &str) -> Option<(Vec<u8>, String)> {
+    let path = newera_core::resolve_asset(assets, file);
+    let bytes = newera_core::vfs::read(&path).ok()?;
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map_or_else(|| "png".to_owned(), str::to_ascii_lowercase);
+    if matches!(ext.as_str(), "png" | "jpg" | "jpeg") {
+        Some((bytes, ext))
+    } else {
+        let image = newera_core::images::decode(&bytes).ok()?;
+        let mut png = Vec::new();
+        image
+            .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+            .ok()?;
+        Some((png, "png".to_owned()))
+    }
 }
 
 /// The home as a binary glTF built in memory, with catalog furniture and no
@@ -569,54 +571,13 @@ pub fn photo_home(
     assets: Option<&Path>,
     quality: PhotoQuality,
 ) -> image::RgbaImage {
-    use glam::Vec3;
+    let home = seen_from(home, view);
     let cache = ModelCache::default();
     let models = |piece: &newera_core::Furniture| {
-        cache.piece_model_seen(piece, assets, Some(camera_distance(home, piece, view.eye)))
+        cache.piece_model_seen(piece, assets, Some(camera_distance(&home, piece, view.eye)))
     };
-    // From above the walls, a dollhouse: the path tracer sees both sides of
-    // every face, so room ceilings would hide the inside that the 3D view
-    // (which culls back faces) shows.
-    let walls_top = home
-        .walls
-        .iter()
-        .map(|w| home.elevation_of(w.level) + w.height.max(w.height_at_end.unwrap_or(0.0)))
-        .fold(0.0, f64::max);
-    let open_top;
-    let home = if walls_top > 0.0 && f64::from(view.eye.y) * 100.0 > walls_top {
-        let mut clone = home.clone();
-        for room in &mut clone.rooms {
-            room.ceiling_visible = false;
-        }
-        open_top = clone;
-        &open_top
-    } else {
-        home
-    };
-    let mesh = Mesh::from_home(home, &Selection::new(), &models);
-
-    let sun = sun_direction(&home.compass, time_ms).map(|(dir, elevation)| {
-        let strength = (elevation / 20.0).clamp(0.15, 1.0) as f32;
-        (dir, Vec3::new(1.0, 0.95, 0.88) * 3.2 * strength)
-    });
-    // Sky light fades through twilight: about ten times less every 3° the
-    // sun sinks below the horizon, down to a moonless night.
-    let (_, elevation) = photo::sun_position(
-        time_ms,
-        home.compass.latitude.unwrap_or(-23.55),
-        home.compass.longitude.unwrap_or(-46.63),
-    );
-    let daylight = match sun {
-        Some((d, _)) if elevation > 0.0 => 0.35 + 0.65 * d.y,
-        _ => (0.35 * 10f64.powf(elevation.min(0.0) / 3.0)).max(2e-6) as f32,
-    };
-    let sky_color = Vec3::from(home.environment.sky_color.map(f32::from)) / 255.0;
-    // Twilight turns the sky deep blue.
-    let dusk = (1.0 - daylight / 0.35).clamp(0.0, 1.0);
-    let sky = sky_color.powf(2.2).lerp(Vec3::new(0.05, 0.09, 0.25), dusk) * 1.4 * daylight;
-    let sun = sun.filter(|_| elevation > 0.0);
-
-    let lights = photo_lights(home);
+    let mesh = Mesh::from_home(&home, &Selection::new(), &models);
+    let light = photo_light(&home, time_ms);
     let (samples, bounces) = quality.budget();
     let load = |file: &str| {
         newera_core::vfs::read(&newera_core::resolve_asset(assets, file))
@@ -639,13 +600,114 @@ pub fn photo_home(
             view: *view,
             samples,
             bounces,
-            sun,
-            sky,
-            lights,
-            exposure: 1.1,
+            sun: light.sun,
+            sky: light.sky,
+            lights: light.lamps,
+            exposure: PHOTO_EXPOSURE,
             load_image: &load,
         },
     )
+}
+
+/// Exposure of photos on top of their auto exposure.
+pub const PHOTO_EXPOSURE: f32 = 1.1;
+
+/// What a photo of the home sees, for a path tracer of its own (Blender
+/// Cycles on a GPU, `deploy/spark-renderer/`): the home as a binary glTF,
+/// with the ground, every model in full and its textures, and the light
+/// [`photo_home`] lights it with. Positions are the glTF's (meters, Y up);
+/// light is in the photo's units of irradiance ([`LUX_PER_UNIT`]).
+#[derive(Debug, Clone)]
+pub struct PhotoScene {
+    pub glb: Vec<u8>,
+    pub view: View,
+    pub light: PhotoLight,
+}
+
+/// The light of a photo.
+#[derive(Debug, Clone)]
+pub struct PhotoLight {
+    /// The direction toward the sun and its irradiance per color channel,
+    /// while it is up.
+    pub sun: Option<(glam::Vec3, glam::Vec3)>,
+    /// The sky's radiance per color channel, the same from every direction.
+    pub sky: glam::Vec3,
+    /// The lamps of the storeys shown.
+    pub lamps: Vec<photo::PointLight>,
+}
+
+/// The scene [`photo_home`] renders from `view` at `time_ms`, for another
+/// renderer ([`PhotoScene`]).
+pub fn photo_scene(
+    home: &newera_core::Home,
+    view: &View,
+    time_ms: i64,
+    assets: Option<&Path>,
+) -> PhotoScene {
+    let home = seen_from(home, view);
+    let cache = ModelCache::default();
+    let models = |piece: &newera_core::Furniture| cache.piece_model(piece, assets);
+    let mesh = Mesh::from_home(&home, &Selection::new(), &models);
+    PhotoScene {
+        glb: export::glb(&mesh, &|file| export_image(assets, file)),
+        view: *view,
+        light: photo_light(&home, time_ms),
+    }
+}
+
+/// The home as a photo from `view` shows it. From above the walls, a
+/// dollhouse: the path tracer sees both sides of every face, so room
+/// ceilings would hide the inside that the 3D view (which culls back faces)
+/// shows.
+fn seen_from<'a>(
+    home: &'a newera_core::Home,
+    view: &View,
+) -> std::borrow::Cow<'a, newera_core::Home> {
+    let walls_top = home
+        .walls
+        .iter()
+        .map(|w| home.elevation_of(w.level) + w.height.max(w.height_at_end.unwrap_or(0.0)))
+        .fold(0.0, f64::max);
+    if walls_top > 0.0 && f64::from(view.eye.y) * 100.0 > walls_top {
+        let mut clone = home.clone();
+        for room in &mut clone.rooms {
+            room.ceiling_visible = false;
+        }
+        std::borrow::Cow::Owned(clone)
+    } else {
+        std::borrow::Cow::Borrowed(home)
+    }
+}
+
+/// Sunlight from the compass location at `time_ms`, the sky, and the lamps.
+#[allow(clippy::cast_possible_truncation)]
+fn photo_light(home: &newera_core::Home, time_ms: i64) -> PhotoLight {
+    use glam::Vec3;
+    let sun = sun_direction(&home.compass, time_ms).map(|(dir, elevation)| {
+        let strength = (elevation / 20.0).clamp(0.15, 1.0) as f32;
+        (dir, Vec3::new(1.0, 0.95, 0.88) * 3.2 * strength)
+    });
+    // Sky light fades through twilight: about ten times less every 3° the
+    // sun sinks below the horizon, down to a moonless night.
+    let (_, elevation) = photo::sun_position(
+        time_ms,
+        home.compass.latitude.unwrap_or(-23.55),
+        home.compass.longitude.unwrap_or(-46.63),
+    );
+    let daylight = match sun {
+        Some((d, _)) if elevation > 0.0 => 0.35 + 0.65 * d.y,
+        _ => (0.35 * 10f64.powf(elevation.min(0.0) / 3.0)).max(2e-6) as f32,
+    };
+    let sky_color = Vec3::from(home.environment.sky_color.map(f32::from)) / 255.0;
+    // Twilight turns the sky deep blue.
+    let dusk = (1.0 - daylight / 0.35).clamp(0.0, 1.0);
+    let sky = sky_color.powf(2.2).lerp(Vec3::new(0.05, 0.09, 0.25), dusk) * 1.4 * daylight;
+    let sun = sun.filter(|_| elevation > 0.0);
+    PhotoLight {
+        sun,
+        sky,
+        lamps: photo_lights(home),
+    }
 }
 
 // Preserve each leaf fixture's optical size when its owner is a larger group.

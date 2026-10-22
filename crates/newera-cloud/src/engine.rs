@@ -18,11 +18,13 @@ use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use base64::Engine as _;
 use newera_core::{Document, SharedDocument};
 use serde_json::{Value, json};
 use sqlx::PgPool;
 
 use crate::accounts::Plan;
+use crate::config::Renderer;
 use crate::secret;
 
 /// Tools that run for minutes of CPU: one at a time per account, and no more
@@ -280,6 +282,9 @@ pub struct Engine {
     heavy: Arc<tokio::sync::Semaphore>,
     busy: Mutex<HashSet<String>>,
     reads: HashSet<String>,
+    /// Where photos are made when it is reached: Cycles on a GPU
+    /// (`crate::renderer`), and the client that reaches it.
+    gpu: Option<(Renderer, reqwest::Client)>,
 }
 
 /// A tool's answer, as the protocol has it (`CallToolResult` as JSON).
@@ -295,12 +300,13 @@ impl Engine {
     /// An engine working in the asset cache (`$XDG_CACHE_HOME/3d-new-era-ai`),
     /// which becomes the only place this process reads files from: projects
     /// are unpacked there, each with its files in its own copy's directory,
-    /// and so are the top views the editor caches.
+    /// and so are the top views the editor caches. `renderer`, when given,
+    /// makes `render_photo`'s photos while it is reached.
     ///
     /// # Errors
     ///
     /// When the directory cannot be made.
-    pub fn new() -> anyhow::Result<Self> {
+    pub fn new(renderer: Option<Renderer>) -> anyhow::Result<Self> {
         let cache = newera_core::cache_dir();
         std::fs::create_dir_all(cache.join("cloud-projects"))?;
         std::fs::create_dir_all(cache.join("cloud-exports"))?;
@@ -319,6 +325,7 @@ impl Engine {
             heavy: Arc::new(tokio::sync::Semaphore::new(cores.saturating_sub(1).max(1))),
             busy: Mutex::new(HashSet::new()),
             reads,
+            gpu: renderer.map(|r| (r, crate::renderer::client())),
         })
     }
 
@@ -461,23 +468,12 @@ impl Engine {
                 "another render is running for this account: wait for it to finish, then ask again",
             ));
         }
-        let permit = if heavy {
-            Some(self.heavy.clone().acquire_owned().await?)
-        } else {
-            None
-        };
         let before = loaded.doc.read().revision();
-        let doc = loaded.doc.clone();
-        let tool = name.to_owned();
-        let ran = tokio::task::spawn_blocking(move || newera_mcp::call(doc, &tool, args)).await;
-        drop(permit);
+        let ran = self.run(&loaded, name, args, heavy).await;
         if heavy {
             self.busy.lock().expect("busy").remove(account);
         }
-        let result = match ran? {
-            Ok(result) => serde_json::to_value(result)?,
-            Err(why) => refused(why),
-        };
+        let result = ran?;
 
         if let Some(kind) = photo
             && result["isError"] != true
@@ -511,6 +507,85 @@ impl Engine {
             )));
         }
         Ok(result)
+    }
+
+    /// Runs the tool on the copy: a photo on the GPU renderer when one is
+    /// configured, falling back to the built-in renderer — within what is
+    /// left of the call's `max_s` — with a note when it is not made there;
+    /// everything else, and that fallback, here, heavy work under the gate
+    /// of the machine's cores.
+    async fn run(
+        &self,
+        loaded: &Loaded,
+        name: &str,
+        args: Value,
+        heavy: bool,
+    ) -> anyhow::Result<Value> {
+        let started = Instant::now();
+        let mut note = None;
+        if name == "render_photo"
+            && let Some((renderer, client)) = &self.gpu
+        {
+            let asked = {
+                let _permit = self.heavy.clone().acquire_owned().await?;
+                let (doc, args) = (loaded.doc.clone(), args.clone());
+                tokio::task::spawn_blocking(move || newera_mcp::photo_scene(doc, args)).await?
+            };
+            match asked {
+                Err(why) => return Ok(refused(why)),
+                Ok(None) => {}
+                Ok(Some(ask)) => {
+                    match crate::renderer::render(renderer, client, &ask, started).await {
+                        crate::renderer::Made::Photo(png) => {
+                            let mut answer = json!({
+                                "content": [{
+                                    "type": "image",
+                                    "data": base64::engine::general_purpose::STANDARD.encode(png),
+                                    "mimeType": "image/png",
+                                }],
+                                "isError": false,
+                            });
+                            newera_mcp::output::structure_json(&mut answer);
+                            return Ok(answer);
+                        }
+                        crate::renderer::Made::Missed(why) => {
+                            tracing::warn!("GPU renderer: {why}");
+                            note = Some(format!(
+                                "The GPU renderer did not make this photo ({why}): it is from the built-in renderer."
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+        let permit = if heavy {
+            Some(self.heavy.clone().acquire_owned().await?)
+        } else {
+            None
+        };
+        let doc = loaded.doc.clone();
+        let tool = name.to_owned();
+        let ran = tokio::task::spawn_blocking(move || {
+            if note.is_some() {
+                newera_mcp::render_photo_since(doc, args, started)
+            } else {
+                newera_mcp::call(doc, &tool, args)
+            }
+            .map(|answer| (answer, note))
+        })
+        .await;
+        drop(permit);
+        Ok(match ran? {
+            Ok((answer, note)) => {
+                let mut result = serde_json::to_value(answer)?;
+                // A refusal is an `Err`: only a photo gets here.
+                if let Some(note) = note {
+                    crate::mcp::add_note(&mut result, &note);
+                }
+                result
+            }
+            Err(why) => refused(why),
+        })
     }
 
     /// Whether a photo of this kind would go over the plan, and what to say

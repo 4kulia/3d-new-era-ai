@@ -136,13 +136,7 @@ pub fn photo(fields: &Fields) -> Option<&str> {
 #[must_use]
 pub fn start(app: AppState) -> Option<tokio::task::JoinHandle<()>> {
     let generator = app.config.generator.clone()?;
-    let client = reqwest::Client::builder()
-        .redirect(reqwest::redirect::Policy::none())
-        .no_proxy()
-        .timeout(REQUEST_WAIT)
-        .user_agent(concat!("3d-new-era-ai/", env!("CARGO_PKG_VERSION")))
-        .build()
-        .expect("an HTTP client");
+    let client = crate::config::spark_client(REQUEST_WAIT);
     Some(tokio::spawn(async move {
         loop {
             if let Err(err) = tick(&app, &generator, &client).await {

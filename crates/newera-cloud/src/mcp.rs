@@ -432,7 +432,7 @@ fn add_notes(answer: &mut Value, notes: &[String]) {
 /// Tells the agent something about an answer it got, beside it: a line of
 /// text after the content, and `note` among its fields — the shape of the
 /// answer stays what it was.
-fn add_note(answer: &mut Value, note: &str) {
+pub(crate) fn add_note(answer: &mut Value, note: &str) {
     if let Some(content) = answer.get_mut("content").and_then(Value::as_array_mut) {
         content.push(json!({"type": "text", "text": note}));
     }

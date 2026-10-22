@@ -1278,15 +1278,16 @@ fn door(ctx: &mut Ctx, leaves: u8, sliding: bool) {
     } else {
         rgb([240, 238, 232])
     };
+    // The jambs stop under the head, so no two faces lie on each other.
     ctx.cube(
         [-w / 2.0, -w / 2.0 + frame],
-        [0.0, h],
+        [0.0, h - frame],
         [-d / 2.0, d / 2.0],
         trim,
     );
     ctx.cube(
         [w / 2.0 - frame, w / 2.0],
-        [0.0, h],
+        [0.0, h - frame],
         [-d / 2.0, d / 2.0],
         trim,
     );
@@ -1306,17 +1307,20 @@ fn door(ctx: &mut Ctx, leaves: u8, sliding: bool) {
             0.0
         };
         if sliding {
+            // Each leaf fills its share of the opening: a metal stile, then
+            // its glass, side by side, so no two faces lie on each other.
+            let stile = 4.0;
             ctx.cube(
-                [x0 - 1.0, x0 + inner / n + 1.0],
-                [0.0, h - frame],
-                [z - 1.5, z + 1.5],
-                rgb(GLASS),
-            );
-            ctx.cube(
-                [x0 - 1.0, x0 + 3.0],
+                [x0, x0 + stile],
                 [0.0, h - frame],
                 [z - 1.8, z + 1.8],
                 rgb(METAL),
+            );
+            ctx.cube(
+                [x0 + stile, x0 + inner / n],
+                [0.0, h - frame],
+                [z - 1.5, z + 1.5],
+                rgb(GLASS),
             );
         } else {
             ctx.cube(
@@ -1357,30 +1361,45 @@ fn window(ctx: &mut Ctx, panes: u8, _is_window: bool) {
         [-d / 2.0, d / 2.0],
         white,
     );
+    // The posts stand between the sill and the head, so no two faces lie
+    // on each other at the corners (a path tracer turns those black).
     ctx.cube(
         [-w / 2.0, -w / 2.0 + frame],
-        [0.0, h],
+        [frame, h - frame],
         [-d / 2.0, d / 2.0],
         white,
     );
     ctx.cube(
         [w / 2.0 - frame, w / 2.0],
-        [0.0, h],
+        [frame, h - frame],
         [-d / 2.0, d / 2.0],
         white,
     );
+    // A pane of glass between each two mullions, ending on them.
     let n = panes.max(1);
     let step = (w - 2.0 * frame) / f64::from(n);
-    for i in 1..n {
-        let x = -w / 2.0 + frame + f64::from(i) * step;
-        ctx.cube([x - 1.5, x + 1.5], [frame, h - frame], [-2.0, 2.0], white);
+    let mullion = 1.5;
+    for i in 0..n {
+        let left = -w / 2.0 + frame + f64::from(i) * step;
+        let right = left + step;
+        if i > 0 {
+            ctx.cube(
+                [left - mullion, left + mullion],
+                [frame, h - frame],
+                [-2.0, 2.0],
+                white,
+            );
+        }
+        ctx.cube(
+            [
+                if i > 0 { left + mullion } else { left },
+                if i + 1 < n { right - mullion } else { right },
+            ],
+            [frame, h - frame],
+            [-0.4, 0.4],
+            rgb(GLASS),
+        );
     }
-    ctx.cube(
-        [-w / 2.0 + frame, w / 2.0 - frame],
-        [frame, h - frame],
-        [-0.4, 0.4],
-        rgb(GLASS),
-    );
 }
 
 fn passage(ctx: &mut Ctx) {
@@ -1388,13 +1407,13 @@ fn passage(ctx: &mut Ctx) {
     let trim = ctx.body_or_default([240, 238, 232]);
     ctx.cube(
         [-w / 2.0, -w / 2.0 + 2.0],
-        [0.0, h],
+        [0.0, h - 2.0],
         [-d / 2.0, d / 2.0],
         trim,
     );
     ctx.cube(
         [w / 2.0 - 2.0, w / 2.0],
-        [0.0, h],
+        [0.0, h - 2.0],
         [-d / 2.0, d / 2.0],
         trim,
     );
@@ -1882,25 +1901,27 @@ fn glass_panel(ctx: &mut Ctx) {
 
 fn garage_door(ctx: &mut Ctx) {
     let (w, d, h, c) = (ctx.w, ctx.d, ctx.h, ctx.c);
+    let jamb = 5.0;
     let panels = (h / 50.0).round().max(3.0);
     let step = h / panels;
+    // The panels run between the jambs, ending on their inner faces.
     for i in 0..crate::count(panels) {
         let y = f64::from(i) * step;
         ctx.cube(
-            [-w / 2.0, w / 2.0],
+            [-w / 2.0 + jamb, w / 2.0 - jamb],
             [y + 0.6, y + step - 0.6],
             [-2.0, 2.0],
             if i % 2 == 0 { c } else { shade(c, -0.05) },
         );
     }
     ctx.cube(
-        [-w / 2.0, -w / 2.0 + 5.0],
+        [-w / 2.0, -w / 2.0 + jamb],
         [0.0, h],
         [-d / 2.0, d / 2.0],
         rgb(DARK),
     );
     ctx.cube(
-        [w / 2.0 - 5.0, w / 2.0],
+        [w / 2.0 - jamb, w / 2.0],
         [0.0, h],
         [-d / 2.0, d / 2.0],
         rgb(DARK),
@@ -2370,6 +2391,214 @@ mod solid_tests {
             faces_out(&mesh);
             let top = mesh.positions.iter().map(|p| p[1]).fold(f32::MIN, f32::max);
             assert!((top - 675.0).abs() < 1e-3);
+        }
+    }
+}
+
+#[cfg(test)]
+mod frame_tests {
+    use newera_core::{Furniture, Opening, OpeningKind};
+
+    type Triangle = [[f32; 3]; 3];
+
+    fn sub(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
+        [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
+    }
+
+    fn dot(a: [f32; 3], b: [f32; 3]) -> f32 {
+        a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+    }
+
+    fn cross(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
+        [
+            a[1] * b[2] - a[2] * b[1],
+            a[2] * b[0] - a[0] * b[2],
+            a[0] * b[1] - a[1] * b[0],
+        ]
+    }
+
+    /// Twice the signed area of a polygon.
+    fn area2(poly: &[[f32; 2]]) -> f32 {
+        (0..poly.len())
+            .map(|i| {
+                let (a, b) = (poly[i], poly[(i + 1) % poly.len()]);
+                a[0] * b[1] - b[0] * a[1]
+            })
+            .sum()
+    }
+
+    /// The part of `poly` inside the counter-clockwise triangle `clip`.
+    fn clipped(poly: Vec<[f32; 2]>, clip: [[f32; 2]; 3]) -> Vec<[f32; 2]> {
+        let mut out = poly;
+        for i in 0..3 {
+            let (a, b) = (clip[i], clip[(i + 1) % 3]);
+            let side = |p: [f32; 2]| (b[0] - a[0]) * (p[1] - a[1]) - (b[1] - a[1]) * (p[0] - a[0]);
+            let input = std::mem::take(&mut out);
+            for j in 0..input.len() {
+                let (p, q) = (input[j], input[(j + 1) % input.len()]);
+                let (sp, sq) = (side(p), side(q));
+                if sp >= 0.0 {
+                    out.push(p);
+                }
+                if (sp >= 0.0) != (sq >= 0.0) {
+                    let t = sp / (sp - sq);
+                    out.push([p[0] + (q[0] - p[0]) * t, p[1] + (q[1] - p[1]) * t]);
+                }
+            }
+            if out.is_empty() {
+                break;
+            }
+        }
+        out
+    }
+
+    /// Pairs of triangles lying in one plane, facing the same way, whose
+    /// areas overlap by more than 0.001 cm²: a path tracer that starts a ray
+    /// on one finds the other at once, and the surface comes out black.
+    fn overlapping_faces(mesh: &crate::Mesh) -> Vec<(Triangle, Triangle)> {
+        let tris: Vec<(Triangle, [f32; 3])> = mesh
+            .indices
+            .as_chunks::<3>()
+            .0
+            .iter()
+            .filter_map(|t| {
+                let v = t.map(|i| mesh.positions[i as usize]);
+                let n = cross(sub(v[1], v[0]), sub(v[2], v[0]));
+                let len = dot(n, n).sqrt();
+                (len > 1e-6).then(|| (v, n.map(|c| c / len)))
+            })
+            .collect();
+        let mut found = Vec::new();
+        for (i, (a, n)) in tris.iter().enumerate() {
+            // Onto the plane of the two axes the normal leans on least.
+            let drop = (0..3)
+                .max_by(|&x, &y| n[x].abs().total_cmp(&n[y].abs()))
+                .expect("three axes");
+            let (u, v) = ((drop + 1) % 3, (drop + 2) % 3);
+            let flat = |t: &Triangle| {
+                let f = t.map(|p| [p[u], p[v]]);
+                if area2(&f) < 0.0 {
+                    [f[0], f[2], f[1]]
+                } else {
+                    f
+                }
+            };
+            for (b, m) in &tris[i + 1..] {
+                if dot(*n, *m) < 0.999 || dot(sub(b[0], a[0]), *n).abs() > 1e-3 {
+                    continue;
+                }
+                let shared = clipped(flat(a).to_vec(), flat(b));
+                if shared.len() >= 3 && area2(&shared).abs() / 2.0 > 1e-3 {
+                    found.push((*a, *b));
+                }
+            }
+        }
+        found
+    }
+
+    fn opening(kind: OpeningKind, leaves: u8, sliding: bool) -> Opening {
+        Opening {
+            kind,
+            leaves,
+            sliding,
+            ..Opening::default()
+        }
+    }
+
+    #[test]
+    #[allow(
+        clippy::cast_possible_truncation,
+        clippy::cast_precision_loss,
+        reason = "unit normals and plane offsets of whole centimetres"
+    )]
+    fn overlapping_faces_are_found_exactly() {
+        let white = crate::mesh::rgb([245, 245, 242]);
+        let mut two = crate::Mesh::default();
+        two.cuboid([0.0, 0.0, 0.0], [10.0, 10.0, 1.0], white);
+        two.cuboid([9.9, 0.0, 0.0], [20.0, 10.0, 1.0], white);
+        let mut planes: Vec<[i32; 4]> = overlapping_faces(&two)
+            .iter()
+            .map(|(a, _)| {
+                let n = cross(sub(a[1], a[0]), sub(a[2], a[0]));
+                let n = n.map(|c| if c.abs() < 1e-6 { 0 } else { c.signum() as i32 });
+                [n[0], n[1], n[2], dot(n.map(|c| c as f32), a[0]) as i32]
+            })
+            .collect();
+        planes.sort_unstable();
+        planes.dedup();
+        assert_eq!(
+            planes,
+            [[0, -1, 0, 0], [0, 0, -1, 0], [0, 0, 1, 1], [0, 1, 0, 10]],
+            "bottom, back, front and top overlap; the touching ends do not"
+        );
+        let mut touching = crate::Mesh::default();
+        touching.cuboid([0.0, 0.0, 0.0], [10.0, 10.0, 1.0], white);
+        touching.cuboid([10.0, 0.0, 0.0], [20.0, 10.0, 1.0], white);
+        assert_eq!(overlapping_faces(&touching), []);
+    }
+
+    #[test]
+    fn opening_frames_have_no_faces_lying_on_each_other() {
+        let white = crate::mesh::rgb([245, 245, 242]);
+        let cases = [
+            (
+                crate::Model::Window { panes: 1 },
+                Some(opening(OpeningKind::Window, 1, false)),
+            ),
+            (
+                crate::Model::Window { panes: 2 },
+                Some(opening(OpeningKind::Window, 1, false)),
+            ),
+            (
+                crate::Model::Window { panes: 3 },
+                Some(opening(OpeningKind::Window, 1, false)),
+            ),
+            (
+                crate::Model::Door,
+                Some(opening(OpeningKind::Door, 1, false)),
+            ),
+            (
+                crate::Model::Door,
+                Some(opening(OpeningKind::Door, 2, false)),
+            ),
+            (
+                crate::Model::Door,
+                Some(opening(OpeningKind::Door, 1, true)),
+            ),
+            (
+                crate::Model::Door,
+                Some(opening(OpeningKind::Door, 2, true)),
+            ),
+            (
+                crate::Model::Window { panes: 4 },
+                Some(opening(OpeningKind::Window, 1, false)),
+            ),
+            (crate::Model::Passage, None),
+        ];
+        let sized = cases
+            .into_iter()
+            .map(|(model, opening)| (model, opening, [150.0, 210.0]))
+            .chain([[150.0, 210.0], [80.0, 120.0], [240.0, 250.0]].map(|size| {
+                (
+                    crate::Model::GarageDoor,
+                    Some(opening(OpeningKind::Door, 1, false)),
+                    size,
+                )
+            }));
+        for (model, opening, [width, height]) in sized {
+            let piece = Furniture {
+                width,
+                depth: 15.0,
+                height,
+                opening: opening.clone(),
+                ..Furniture::default()
+            };
+            let mesh = super::build(model, &piece, white);
+            assert_eq!(
+                overlapping_faces(&mesh),
+                [],
+                "{model:?} {width}x{height} {opening:?}"
+            );
         }
     }
 }

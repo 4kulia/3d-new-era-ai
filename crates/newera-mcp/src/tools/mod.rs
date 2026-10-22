@@ -62,7 +62,7 @@ mod native_job;
 mod plumbing;
 mod project;
 mod read;
-mod render;
+pub(crate) mod render;
 mod reply;
 mod roof;
 pub(crate) mod rules;

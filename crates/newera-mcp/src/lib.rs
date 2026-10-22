@@ -23,6 +23,7 @@ use newera_core::SharedDocument;
 
 pub use surface::Transport;
 pub use tools::NewEraMcp;
+pub use tools::render::PhotoAsk;
 
 // The transports need an operating system to talk through: a pipe, a socket.
 // A browser tab has neither, and does not need them — there the tools are
@@ -94,6 +95,66 @@ pub fn tools() -> Vec<rmcp::model::Tool> {
     NewEraMcp::new(SharedDocument::new(newera_core::Document::default())).tools()
 }
 
+/// What `render_photo` with `args` would render, for a renderer outside
+/// this process: the scene, the size and the quality, the way the tool
+/// itself reads them. `None` when the call renders nothing (`estimate`,
+/// `cancel`), which the tool answers itself.
+///
+/// # Errors
+///
+/// As [`call`] refuses the same arguments: the reason.
+pub fn photo_scene(
+    document: SharedDocument,
+    args: serde_json::Value,
+) -> Result<Option<PhotoAsk>, String> {
+    let (server, p) = photo_call(document, args)?;
+    server.photo_scene(&p).map_err(|e| e.message.to_string())
+}
+
+/// `render_photo` with `args`, for a call that started at `started` and
+/// spent the time since on another renderer: its `max_s` counts from
+/// `started`, and once spent the photo is refused as the tool refuses one
+/// past it. Answers as [`call`] does.
+///
+/// # Errors
+///
+/// As [`call`]: the reason.
+pub fn render_photo_since(
+    document: SharedDocument,
+    args: serde_json::Value,
+    started: std::time::Instant,
+) -> Result<rmcp::model::CallToolResult, String> {
+    let (server, p) = photo_call(document, args)?;
+    let mut result = server
+        .render_photo_since(&p, started)
+        .map_err(|e| e.message.to_string())?;
+    output::structure(&mut result);
+    Ok(result)
+}
+
+/// The tools on `document`, and `render_photo`'s arguments read from `args`
+/// as [`call`] reads them.
+fn photo_call(
+    document: SharedDocument,
+    args: serde_json::Value,
+) -> Result<(NewEraMcp, tools::render::PhotoParams), String> {
+    let server = NewEraMcp::new(document);
+    if let Some(why) = server.unknown_argument("render_photo", &args) {
+        return Err(why);
+    }
+    Ok((server, params(args)?))
+}
+
+/// A tool's arguments; none given reads as an empty object.
+fn params<T: serde::de::DeserializeOwned>(args: serde_json::Value) -> Result<T, String> {
+    let args = if args.is_null() {
+        serde_json::json!({})
+    } else {
+        args
+    };
+    serde_json::from_value(args).map_err(|e| format!("arguments: {e}"))
+}
+
 /// Runs one tool against a document, with no MCP session in sight.
 ///
 /// The protocol — the handshake, the session, the transport — is one thing;
@@ -121,14 +182,6 @@ fn run(
 ) -> Result<rmcp::model::CallToolResult, String> {
     use rmcp::handler::server::wrapper::Parameters;
 
-    fn params<T: serde::de::DeserializeOwned>(args: serde_json::Value) -> Result<T, String> {
-        let args = if args.is_null() {
-            serde_json::json!({})
-        } else {
-            args
-        };
-        serde_json::from_value(args).map_err(|e| format!("arguments: {e}"))
-    }
     // What a tool that answers in words gives back, in the shape the protocol
     // wants.
     fn said(text: String) -> rmcp::model::CallToolResult {

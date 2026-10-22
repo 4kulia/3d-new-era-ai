@@ -527,6 +527,16 @@ impl NewEraMcp {
         &self,
         Parameters(p): Parameters<PhotoParams>,
     ) -> Result<CallToolResult, ErrorData> {
+        self.render_photo_since(&p, std::time::Instant::now())
+    }
+
+    /// [`Self::render_photo`] for a call that started at `started`: its
+    /// `max_s` counts from then (time already spent on another renderer).
+    pub(crate) fn render_photo_since(
+        &self,
+        p: &PhotoParams,
+        started: std::time::Instant,
+    ) -> Result<CallToolResult, ErrorData> {
         if p.cancel {
             #[cfg(not(target_arch = "wasm32"))]
             let stopped = super::native_job::cancel_running();
@@ -540,47 +550,13 @@ impl NewEraMcp {
                 },
             )]));
         }
-        let (w, h) = (
-            p.w.unwrap_or(480).clamp(64, 1600),
-            p.h.unwrap_or(360).clamp(64, 1200),
-        );
-        #[allow(clippy::cast_precision_loss)]
-        let aspect = w as f32 / h as f32;
-        let quality = match p.quality.as_deref() {
-            None | Some("draft") => newera_render::PhotoQuality::Draft,
-            Some("good") => newera_render::PhotoQuality::Good,
-            Some("best") => newera_render::PhotoQuality::Best,
-            Some(other) => return Err(invalid(format!("unknown quality `{other}`"))),
-        };
+        let (w, h) = photo_size(p);
+        let quality = photo_quality(p)?;
         let doc = self.document.read();
         let home = doc.home().clone();
         let assets = doc.asset_dir();
         drop(doc);
-        let (view, time) = match (p.cam, p.view.as_deref()) {
-            (Some(i), _) => {
-                let camera = home
-                    .cameras
-                    .stored
-                    .get(i)
-                    .ok_or_else(|| invalid(format!("no stored camera {i}")))?;
-                (
-                    newera_render::View::from_camera(camera, aspect),
-                    camera.time,
-                )
-            }
-            (None, Some("visitor")) => (
-                newera_render::View::from_camera(&home.cameras.observer, aspect),
-                home.cameras.observer.time,
-            ),
-            (None, None | Some("aerial")) => (
-                newera_render::View::aerial(&home, p.yaw.unwrap_or(60.0), p.pitch.unwrap_or(40.0)),
-                home.cameras.top.time,
-            ),
-            (None, Some(other)) => return Err(invalid(format!("unknown view `{other}`"))),
-        };
-        let time = p.hour.map_or(time, |hour| {
-            newera_render::at_local_hour(time, hour, home.compass.longitude.unwrap_or(-46.63))
-        });
+        let (view, time) = photo_view(&home, p, w, h)?;
         let budget = newera_render::thread_budget();
         let threads = p.threads.unwrap_or(budget).clamp(1, budget);
         if p.estimate {
@@ -611,8 +587,13 @@ impl NewEraMcp {
         // A deadline too far to be counted is none.
         let until = p.max_s.and_then(|seconds| {
             let span = std::time::Duration::try_from_secs_f64(seconds).ok()?;
-            Some((seconds, std::time::Instant::now().checked_add(span)?))
+            Some((seconds, started.checked_add(span)?))
         });
+        if let Some((seconds, until)) = until
+            && std::time::Instant::now() >= until
+        {
+            return Err(invalid(photo_late(seconds)));
+        }
         let image = match until {
             None => render(),
             Some((seconds, until)) => {
@@ -623,9 +604,7 @@ impl NewEraMcp {
                 // is not refused by a late look at the clock.
                 match deadline.stop.load(std::sync::atomic::Ordering::SeqCst) {
                     LATE => {
-                        return Err(invalid(format!(
-                            "stopped after max_s={seconds} s; nothing in the project changed (estimate=true says what it takes; draft, fewer pixels or threads cost less)"
-                        )));
+                        return Err(invalid(photo_late(seconds)));
                     }
                     STOPPED => return Err(invalid(newera_core::progress::CANCELLED)),
                     _ => image,
@@ -641,6 +620,31 @@ impl NewEraMcp {
             data,
             "image/png",
         )]))
+    }
+    /// What [`Self::render_photo`] would render, for a renderer outside
+    /// this process; `None` when the call renders nothing (`estimate`,
+    /// `cancel`).
+    pub(crate) fn photo_scene(&self, p: &PhotoParams) -> Result<Option<PhotoAsk>, ErrorData> {
+        if p.cancel || p.estimate {
+            return Ok(None);
+        }
+        let (width, height) = photo_size(p);
+        let quality = photo_quality(p)?;
+        if p.max_s.is_some_and(|s| !(s.is_finite() && s > 0.0)) {
+            return Err(invalid("max_s: seconds above 0"));
+        }
+        let doc = self.document.read();
+        let home = doc.home().clone();
+        let assets = doc.asset_dir();
+        drop(doc);
+        let (view, time) = photo_view(&home, p, width, height)?;
+        Ok(Some(PhotoAsk {
+            scene: newera_render::photo_scene(&home, &view, time, assets.as_deref()),
+            width,
+            height,
+            quality,
+            max_s: p.max_s,
+        }))
     }
     #[tool(
         description = "Export to a file, by its extension. what=plan (default): the plan as .pdf (A3; scale=50/100 or fit), .svg (true scale) or .png, or the 3D model as .glb or .obj. what=cut_list: the joinery's cut list (and that of groups drawn by hand) as .csv (spreadsheet), .dxf (boards laid out on sheets, for CNC) or .svg (sheets to view); `cut_list` reads it."
@@ -696,6 +700,78 @@ impl NewEraMcp {
             .map_err(|e| invalid(format!("cannot write {}: {e}", path.display())))?;
         Ok(format!("ok {}", path.display()))
     }
+}
+
+/// What a photo that ran out of its `max_s` answers.
+pub(crate) fn photo_late(seconds: f64) -> String {
+    format!(
+        "stopped after max_s={seconds} s; nothing in the project changed (estimate=true says what it takes; draft, fewer pixels or threads cost less)"
+    )
+}
+
+/// A photo asked for, ready for a renderer outside this process.
+#[derive(Debug, Clone)]
+pub struct PhotoAsk {
+    pub scene: newera_render::PhotoScene,
+    pub width: u32,
+    pub height: u32,
+    pub quality: newera_render::PhotoQuality,
+    /// Seconds it may take, when the call said.
+    pub max_s: Option<f64>,
+}
+
+/// The photo's size in pixels, as asked or by default, within its bounds.
+fn photo_size(p: &PhotoParams) -> (u32, u32) {
+    (
+        p.w.unwrap_or(480).clamp(64, 1600),
+        p.h.unwrap_or(360).clamp(64, 1200),
+    )
+}
+
+fn photo_quality(p: &PhotoParams) -> Result<newera_render::PhotoQuality, ErrorData> {
+    match p.quality.as_deref() {
+        None | Some("draft") => Ok(newera_render::PhotoQuality::Draft),
+        Some("good") => Ok(newera_render::PhotoQuality::Good),
+        Some("best") => Ok(newera_render::PhotoQuality::Best),
+        Some(other) => Err(invalid(format!("unknown quality `{other}`"))),
+    }
+}
+
+/// The photo's point of view and the moment its daylight is of.
+fn photo_view(
+    home: &newera_core::Home,
+    p: &PhotoParams,
+    w: u32,
+    h: u32,
+) -> Result<(newera_render::View, i64), ErrorData> {
+    #[allow(clippy::cast_precision_loss)]
+    let aspect = w as f32 / h as f32;
+    let (view, time) = match (p.cam, p.view.as_deref()) {
+        (Some(i), _) => {
+            let camera = home
+                .cameras
+                .stored
+                .get(i)
+                .ok_or_else(|| invalid(format!("no stored camera {i}")))?;
+            (
+                newera_render::View::from_camera(camera, aspect),
+                camera.time,
+            )
+        }
+        (None, Some("visitor")) => (
+            newera_render::View::from_camera(&home.cameras.observer, aspect),
+            home.cameras.observer.time,
+        ),
+        (None, None | Some("aerial")) => (
+            newera_render::View::aerial(home, p.yaw.unwrap_or(60.0), p.pitch.unwrap_or(40.0)),
+            home.cameras.top.time,
+        ),
+        (None, Some(other)) => return Err(invalid(format!("unknown view `{other}`"))),
+    };
+    let time = p.hour.map_or(time, |hour| {
+        newera_render::at_local_hour(time, hour, home.compass.longitude.unwrap_or(-46.63))
+    });
+    Ok((view, time))
 }
 
 /// The product photo at the render's height, at most 1600 px wide and in

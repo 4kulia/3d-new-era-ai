@@ -122,7 +122,7 @@ impl std::fmt::Debug for PhotoOptions<'_> {
 }
 
 /// Log-average luminance auto exposure aims for.
-const AUTO_EXPOSURE_KEY: f32 = 0.12;
+pub const AUTO_EXPOSURE_KEY: f32 = 0.12;
 
 /// Sun position for a moment and place: `(azimuth, elevation)` in degrees,
 /// azimuth clockwise from north. Simplified solar ephemeris (good to a
@@ -421,7 +421,7 @@ fn hemisphere(n: Vec3, rng: &mut Rng) -> Vec3 {
 
 /// Transparent surfaces at most this opaque are clear glass (window glass is
 /// 0.35): rays always cross them.
-const CLEAR_GLASS_ALPHA: f32 = 0.5;
+pub const CLEAR_GLASS_ALPHA: f32 = 0.5;
 
 /// A tent-distributed offset in -1..1 from a uniform number.
 fn tent(r: f32) -> f32 {
@@ -870,7 +870,7 @@ fn render_threads() -> usize {
 /// How far photos are pulled toward neutral (0 none, 1 full gray world):
 /// halfway keeps warm lamps warm but stops daylight rooms with 3000 K
 /// downlights on from turning orange, as a camera's auto white balance does.
-const WHITE_BALANCE: f32 = 0.5;
+pub const WHITE_BALANCE: f32 = 0.5;
 
 /// Gray-world white balance: channel gains that make the scene's average
 /// color neutral, raised to `strength` and keeping luminance. Very bright

@@ -168,31 +168,66 @@ impl Generator {
     /// Reads `NEWERA_GENERATOR_URL` and `NEWERA_GENERATOR_TOKEN`: both, or
     /// neither (generation off).
     fn from_env(var: &dyn Fn(&str) -> Option<String>) -> anyhow::Result<Option<Self>> {
-        match (var("NEWERA_GENERATOR_URL"), var("NEWERA_GENERATOR_TOKEN")) {
-            (None, None) => {
-                tracing::warn!("no NEWERA_GENERATOR_URL: furniture models are not generated");
-                Ok(None)
-            }
-            (Some(url), Some(token)) => {
-                let url = url.trim().trim_end_matches('/').to_owned();
-                let token = token.trim().to_owned();
-                anyhow::ensure!(!token.is_empty(), "NEWERA_GENERATOR_TOKEN is empty");
-                anyhow::ensure!(
-                    url.starts_with("http://") || url.starts_with("https://"),
-                    "NEWERA_GENERATOR_URL is an http(s) address"
-                );
-                Ok(Some(Self {
-                    url,
-                    token,
-                    poll: GENERATOR_POLL,
-                    backoff: GENERATOR_BACKOFF,
-                    stall: GENERATOR_STALL,
-                }))
-            }
-            (Some(_), None) => anyhow::bail!("missing NEWERA_GENERATOR_TOKEN"),
-            (None, Some(_)) => anyhow::bail!("missing NEWERA_GENERATOR_URL"),
-        }
+        Ok(spark_service(
+            var,
+            "NEWERA_GENERATOR",
+            "furniture models are not generated",
+        )?
+        .map(|(url, token)| Self {
+            url,
+            token,
+            poll: GENERATOR_POLL,
+            backoff: GENERATOR_BACKOFF,
+            stall: GENERATOR_STALL,
+        }))
     }
+}
+
+/// A service on the Spark, from `{prefix}_URL` and `{prefix}_TOKEN`: its
+/// address without a trailing slash and its token, both or neither (`off`
+/// says what is then off).
+fn spark_service(
+    var: &dyn Fn(&str) -> Option<String>,
+    prefix: &str,
+    off: &str,
+) -> anyhow::Result<Option<(String, String)>> {
+    let (url_name, token_name) = (format!("{prefix}_URL"), format!("{prefix}_TOKEN"));
+    match (var(&url_name), var(&token_name)) {
+        (None, None) => {
+            tracing::warn!("no {url_name}: {off}");
+            Ok(None)
+        }
+        (Some(url), Some(token)) => {
+            let url = url.trim().trim_end_matches('/').to_owned();
+            let token = token.trim().to_owned();
+            anyhow::ensure!(!token.is_empty(), "{token_name} is empty");
+            anyhow::ensure!(
+                url.starts_with("http://") || url.starts_with("https://"),
+                "{url_name} is an http(s) address"
+            );
+            Ok(Some((url, token)))
+        }
+        (Some(_), None) => anyhow::bail!("missing {token_name}"),
+        (None, Some(_)) => anyhow::bail!("missing {url_name}"),
+    }
+}
+
+/// The HTTP client a service on the Spark is reached with: only at the
+/// address configured (no redirects, no proxy), each request bounded by
+/// `timeout`.
+///
+/// # Panics
+///
+/// If the HTTP client cannot be built (no TLS backend), a build problem.
+#[must_use]
+pub fn spark_client(timeout: std::time::Duration) -> reqwest::Client {
+    reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .no_proxy()
+        .timeout(timeout)
+        .user_agent(concat!("3d-new-era-ai/", env!("CARGO_PKG_VERSION")))
+        .build()
+        .expect("an HTTP client")
 }
 
 impl std::fmt::Debug for Generator {
@@ -203,6 +238,62 @@ impl std::fmt::Debug for Generator {
             .field("poll", &self.poll)
             .field("backoff", &self.backoff)
             .field("stall", &self.stall)
+            .finish()
+    }
+}
+
+/// The photo renderer `render_photo` uses when it is reached: Blender
+/// Cycles on a GPU, the service in `deploy/spark-renderer/`, on a host of
+/// the private network (the tailnet).
+#[derive(Clone)]
+pub struct Renderer {
+    /// Where it answers, without a trailing slash, e.g. `http://100.76.21.14:7981`.
+    pub url: String,
+    /// Sent as `X-Renderer-Token`.
+    pub token: String,
+    /// How long a photo is waited for, from the call's start, before the
+    /// built-in renderer makes it.
+    pub wait: std::time::Duration,
+    /// How often a photo in flight is asked after.
+    pub poll: std::time::Duration,
+}
+
+/// How long a photo is waited for, counted from the call's start: a photo
+/// at 1600 × 900 takes under half a minute through the API at every
+/// quality (`deploy/spark-renderer/README.md`, Measured), so one other render
+/// may be ahead of it. A chosen bound: how long the AI clients (Claude, `ChatGPT`) wait for a
+/// tool call is not known here. Past it the built-in renderer makes the
+/// photo; a call's `max_s` bounds both together.
+pub const RENDERER_WAIT: std::time::Duration = std::time::Duration::from_secs(90);
+/// How often a photo in flight is asked after. A chosen bound: a small
+/// fraction of a render.
+pub const RENDERER_POLL: std::time::Duration = std::time::Duration::from_millis(500);
+
+impl Renderer {
+    /// Reads `NEWERA_RENDERER_URL` and `NEWERA_RENDERER_TOKEN`: both, or
+    /// neither (photos made by the built-in renderer).
+    fn from_env(var: &dyn Fn(&str) -> Option<String>) -> anyhow::Result<Option<Self>> {
+        Ok(spark_service(
+            var,
+            "NEWERA_RENDERER",
+            "photos are made by the built-in renderer",
+        )?
+        .map(|(url, token)| Self {
+            url,
+            token,
+            wait: RENDERER_WAIT,
+            poll: RENDERER_POLL,
+        }))
+    }
+}
+
+impl std::fmt::Debug for Renderer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Renderer")
+            .field("url", &self.url)
+            .field("token", &"<hidden>")
+            .field("wait", &self.wait)
+            .field("poll", &self.poll)
             .finish()
     }
 }
@@ -294,6 +385,8 @@ pub struct Config {
     /// The 3D generator; `None` leaves imported furniture on its placeholder
     /// until a model is attached.
     pub generator: Option<Generator>,
+    /// The GPU photo renderer; `None` leaves photos to the built-in one.
+    pub renderer: Option<Renderer>,
 }
 
 impl std::fmt::Debug for Config {
@@ -310,6 +403,7 @@ impl std::fmt::Debug for Config {
             .field("port", &self.port)
             .field("anysite", &self.anysite)
             .field("generator", &self.generator)
+            .field("renderer", &self.renderer)
             .finish()
     }
 }
@@ -369,6 +463,7 @@ impl Config {
             tracing::warn!("no ANYSITE_API_KEY: product import is off");
         }
         let generator = Generator::from_env(&var)?;
+        let renderer = Renderer::from_env(&var)?;
         let port = var("PORT")
             .map(|p| p.parse().context("PORT"))
             .transpose()?
@@ -385,6 +480,7 @@ impl Config {
             port,
             anysite,
             generator,
+            renderer,
         })
     }
 
@@ -489,6 +585,49 @@ mod tests {
             ][..],
         ] {
             assert!(Generator::from_env(&env(half)).is_err(), "{half:?}");
+        }
+    }
+
+    #[test]
+    fn the_renderer_takes_its_address_and_token_together() {
+        let env = |given: &'static [(&'static str, &'static str)]| {
+            move |name: &str| {
+                given
+                    .iter()
+                    .find(|(n, _)| *n == name)
+                    .map(|(_, v)| (*v).to_owned())
+            }
+        };
+        assert!(Renderer::from_env(&env(&[])).unwrap().is_none());
+        let both = Renderer::from_env(&env(&[
+            ("NEWERA_RENDERER_URL", " http://100.76.21.14:7981/ "),
+            ("NEWERA_RENDERER_TOKEN", " r3nd "),
+        ]))
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            (both.url.as_str(), both.token.as_str(), both.wait, both.poll),
+            (
+                "http://100.76.21.14:7981",
+                "r3nd",
+                RENDERER_WAIT,
+                RENDERER_POLL
+            )
+        );
+        assert!(!format!("{both:?}").contains("r3nd"), "the token is hidden");
+        for half in [
+            &[("NEWERA_RENDERER_URL", "http://h:1")][..],
+            &[("NEWERA_RENDERER_TOKEN", "t")][..],
+            &[
+                ("NEWERA_RENDERER_URL", "h:1"),
+                ("NEWERA_RENDERER_TOKEN", "t"),
+            ][..],
+            &[
+                ("NEWERA_RENDERER_URL", "http://h:1"),
+                ("NEWERA_RENDERER_TOKEN", "  "),
+            ][..],
+        ] {
+            assert!(Renderer::from_env(&env(half)).is_err(), "{half:?}");
         }
     }
 

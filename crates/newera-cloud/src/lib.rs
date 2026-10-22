@@ -32,6 +32,7 @@ pub mod models;
 pub mod oauth;
 pub mod pages;
 pub mod products;
+pub mod renderer;
 pub mod secret;
 pub mod staging;
 
@@ -83,7 +84,8 @@ impl AppState {
     /// If the HTTP client cannot be built (no TLS backend), which is a build
     /// problem, or the engine's directory cannot be made.
     pub fn new(config: Config, db: PgPool) -> Self {
-        let engine = Arc::new(engine::Engine::new().expect("the engine's directory"));
+        let engine =
+            Arc::new(engine::Engine::new(config.renderer.clone()).expect("the engine's directory"));
         let http = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(10))
             .redirect(reqwest::redirect::Policy::none())

@@ -3437,6 +3437,8 @@ dependencies = [
  "base64 0.23.1",
  "futures-util",
  "getrandom 0.4.3",
+ "glam",
+ "image",
  "newera-catalog",
  "newera-core",
  "newera-mcp",

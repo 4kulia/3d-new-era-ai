@@ -62,6 +62,21 @@ async fn service_configured(
     anysite: Option<newera_shop::AnySite>,
     generator: Option<newera_cloud::config::Generator>,
 ) -> Option<(String, AppState)> {
+    service_rendering(sites, allowed, google, mail, http, anysite, generator, None).await
+}
+
+/// The same, photos made by `renderer` while it is reached.
+#[allow(clippy::too_many_arguments)]
+async fn service_rendering(
+    sites: Vec<String>,
+    allowed: AllowedEmails,
+    google: Option<Google>,
+    mail: Mail,
+    http: Option<reqwest::Client>,
+    anysite: Option<newera_shop::AnySite>,
+    generator: Option<newera_cloud::config::Generator>,
+    renderer: Option<newera_cloud::config::Renderer>,
+) -> Option<(String, AppState)> {
     let Ok(admin) = std::env::var("TEST_DATABASE_URL") else {
         eprintln!("TEST_DATABASE_URL not set: skipping");
         return None;
@@ -100,6 +115,7 @@ async fn service_configured(
         port: 0,
         anysite,
         generator,
+        renderer,
     };
     let mut state = AppState::start(config, db).await.expect("startup");
     if let Some(http) = http {
@@ -7151,4 +7167,401 @@ async fn a_model_attached_under_the_generators_name_stays() {
         "a model was attached while it was being made, and stays: edit_products action=generate makes a new one in its place"
     );
     assert_eq!(kept_model(&state, "p1").await, by_hand);
+}
+
+// ------------------------------------------------------------ GPU photos
+
+/// What the stand-in renderer answers when asked after a photo.
+#[derive(Debug, Clone)]
+enum Drawn {
+    Running,
+    Failed(&'static str),
+    Lost,
+    Photo(Vec<u8>),
+}
+
+/// The token the stand-in renderer takes.
+const RENDERER_TOKEN: &str = "renderer-test-token";
+
+/// The renderer on the Spark, stood in for on a local port: it takes every
+/// photo it is given, the token checked, and keeps what it was asked — or
+/// turns each away with `refuse`; each question after a photo gets the next
+/// answer of its script, and the last one again once the script is spent.
+#[derive(Debug, Clone, Default)]
+struct StandInRenderer {
+    asked: std::sync::Arc<std::sync::Mutex<Vec<Value>>>,
+    script: std::sync::Arc<std::sync::Mutex<std::collections::VecDeque<Drawn>>>,
+    refuse: std::sync::Arc<std::sync::Mutex<Option<Value>>>,
+}
+
+impl StandInRenderer {
+    fn asked(&self) -> Vec<Value> {
+        self.asked.lock().unwrap().clone()
+    }
+
+    fn next(&self) -> Drawn {
+        let mut script = self.script.lock().unwrap();
+        if script.len() > 1 {
+            script.pop_front().unwrap()
+        } else {
+            script.front().cloned().expect("a script")
+        }
+    }
+
+    fn serve(&self, listener: tokio::net::TcpListener) {
+        use axum::extract::{Path, State};
+        use axum::http::{HeaderMap, StatusCode, header};
+        use axum::response::IntoResponse;
+
+        fn admitted(headers: &HeaderMap) -> bool {
+            headers
+                .get("x-renderer-token")
+                .is_some_and(|t| t == RENDERER_TOKEN)
+        }
+        let app = axum::Router::new()
+            .route(
+                "/render",
+                axum::routing::post(
+                    |State(me): State<Self>, headers: HeaderMap, axum::Json(body): axum::Json<Value>| async move {
+                        if !admitted(&headers) {
+                            return (
+                                StatusCode::UNAUTHORIZED,
+                                axum::Json(json!({"error": "X-Renderer-Token is missing or wrong"})),
+                            )
+                                .into_response();
+                        }
+                        if let Some(refusal) = me.refuse.lock().unwrap().clone() {
+                            return (StatusCode::UNPROCESSABLE_ENTITY, axum::Json(refusal)).into_response();
+                        }
+                        let mut asked = me.asked.lock().unwrap();
+                        asked.push(body);
+                        let job = format!("r{}", asked.len());
+                        (StatusCode::ACCEPTED, axum::Json(json!({"job": job, "status": "queued"})))
+                            .into_response()
+                    },
+                ),
+            )
+            .layer(axum::extract::DefaultBodyLimit::max(64 << 20))
+            .route(
+                "/jobs/{id}",
+                axum::routing::get(
+                    |State(me): State<Self>, headers: HeaderMap, Path(id): Path<String>| async move {
+                        if !admitted(&headers) {
+                            return StatusCode::UNAUTHORIZED.into_response();
+                        }
+                        match me.next() {
+                            Drawn::Running => axum::Json(json!({"status": "running"})).into_response(),
+                            Drawn::Failed(why) => {
+                                axum::Json(json!({"status": "failed", "error": why})).into_response()
+                            }
+                            Drawn::Lost => (
+                                StatusCode::NOT_FOUND,
+                                axum::Json(json!({"error": format!("no job {id}")})),
+                            )
+                                .into_response(),
+                            Drawn::Photo(png) => ([(header::CONTENT_TYPE, "image/png")], png).into_response(),
+                        }
+                    },
+                ),
+            )
+            .with_state(self.clone());
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    }
+}
+
+/// The stand-in renderer, up on a port of its own: it and its address.
+async fn renderer_up(script: Vec<Drawn>) -> (StandInRenderer, String) {
+    let stand_in = StandInRenderer::default();
+    *stand_in.script.lock().unwrap() = script.into();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    stand_in.serve(listener);
+    (stand_in, url)
+}
+
+/// The service, its photos made by the renderer at `url`, waited for `wait`.
+async fn rendering_service(url: &str, wait: std::time::Duration) -> Option<(String, AppState)> {
+    rendering_service_with(url, wait, RENDERER_TOKEN).await
+}
+
+/// The same, sending `token`.
+async fn rendering_service_with(
+    url: &str,
+    wait: std::time::Duration,
+    token: &str,
+) -> Option<(String, AppState)> {
+    service_rendering(
+        vec![SITE.to_owned()],
+        AllowedEmails::default(),
+        None,
+        Mail::Log,
+        None,
+        None,
+        None,
+        Some(newera_cloud::config::Renderer {
+            url: url.to_owned(),
+            token: token.to_owned(),
+            wait,
+            poll: std::time::Duration::from_millis(20),
+        }),
+    )
+    .await
+}
+
+/// A PNG the stand-in renderer makes: 3 × 2, one colour.
+fn gpu_png() -> Vec<u8> {
+    let image = image::DynamicImage::ImageRgba8(image::RgbaImage::from_pixel(
+        3,
+        2,
+        image::Rgba([10, 200, 30, 255]),
+    ));
+    let mut png = Vec::new();
+    image
+        .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+        .unwrap();
+    png
+}
+
+/// The size of the PNG an answer carries.
+fn photo_size(answer: &Value) -> (u32, u32) {
+    let data = answer["content"][0]["data"].as_str().expect("an image");
+    let png = base64::engine::general_purpose::STANDARD
+        .decode(data)
+        .unwrap();
+    let image = image::load_from_memory(&png).unwrap();
+    (image.width(), image.height())
+}
+
+async fn draft_renders(state: &AppState) -> i32 {
+    sqlx::query_scalar("select coalesce(sum(count), 0)::int from usage where kind = 'draft_render'")
+        .fetch_one(&state.db)
+        .await
+        .unwrap()
+}
+
+/// With a renderer up, `render_photo` sends it the scene the built-in
+/// renderer would draw and answers its PNG, as it answers its own; a call
+/// the tool refuses never reaches it.
+#[tokio::test]
+async fn a_photo_is_made_by_the_gpu_renderer() {
+    let (stand_in, url) = renderer_up(vec![
+        Drawn::Running,
+        Drawn::Running,
+        Drawn::Photo(gpu_png()),
+    ])
+    .await;
+    let Some((base, state)) = rendering_service(&url, std::time::Duration::from_secs(20)).await
+    else {
+        return;
+    };
+    let (_, access, _) = drawn_project(&base, &state, "ana@example.com").await;
+    let photo = tool(&base, &access, "render_photo", json!({"w": 320, "h": 200})).await;
+    assert_eq!(
+        photo,
+        json!({
+            "content": [{"type": "image", "data": base64::engine::general_purpose::STANDARD.encode(gpu_png()), "mimeType": "image/png"}],
+            "isError": false,
+            "structuredContent": {"mimeType": "image/png"},
+        })
+    );
+    assert_eq!(draft_renders(&state).await, 1, "the photo counts");
+    let asked = stand_in.asked();
+    assert_eq!(asked.len(), 1);
+    let mut sent = asked[0].clone();
+    let glb = base64::engine::general_purpose::STANDARD
+        .decode(sent["glb"].as_str().unwrap())
+        .unwrap();
+    assert_eq!(&glb[..4], b"glTF", "the scene is a binary glTF");
+    let camera = sent["camera"].clone();
+    assert_eq!(camera["eye"].as_array().map(Vec::len), Some(3), "{camera}");
+    assert_eq!(
+        camera["target"].as_array().map(Vec::len),
+        Some(3),
+        "{camera}"
+    );
+    assert!(
+        camera["fov_y_deg"]
+            .as_f64()
+            .is_some_and(|f| f > 1.0 && f < 179.0),
+        "{camera}"
+    );
+    assert_eq!(sent["sky"].as_array().map(Vec::len), Some(3), "{sent:?}");
+    for moving in ["glb", "camera", "sky", "sun"] {
+        sent.as_object_mut().unwrap().remove(moving);
+    }
+    assert_eq!(
+        sent,
+        json!({
+            "lamps": [],
+            "exposure": 1.1,
+            "auto_exposure_key": 0.12,
+            "clear_glass_alpha": 0.5,
+            "white_balance": 0.5,
+            "width": 320,
+            "height": 200,
+            "samples": 32,
+        })
+    );
+
+    let refused = tool(&base, &access, "render_photo", json!({"view": "sideways"})).await;
+    assert_eq!(
+        refused,
+        json!({"content": [{"type": "text", "text": "unknown view `sideways`"}], "isError": true})
+    );
+    assert_eq!(stand_in.asked().len(), 1, "a refused call is not sent");
+    let estimate = tool(&base, &access, "render_photo", json!({"estimate": true})).await;
+    assert_eq!(estimate["isError"], false, "{estimate}");
+    assert!(
+        estimate["structuredContent"]["work"].is_object(),
+        "{estimate}"
+    );
+    assert_eq!(stand_in.asked().len(), 1, "an estimate is answered here");
+}
+
+/// The note a fallback photo carries, for the reason `why`.
+fn fallback_note(why: &str) -> String {
+    format!("The GPU renderer did not make this photo ({why}): it is from the built-in renderer.")
+}
+
+/// What a fallback photo looks like: the built-in renderer's, at the size
+/// asked, with the note saying why.
+fn assert_fallback(photo: &Value, why: &str) {
+    assert_eq!(photo["isError"], false, "{photo}");
+    assert_eq!(photo_size(photo), (96, 64), "{photo}");
+    let note = fallback_note(why);
+    assert_eq!(
+        photo["content"][1],
+        json!({"type": "text", "text": note}),
+        "{photo}"
+    );
+    assert_eq!(
+        photo["content"].as_array().map(Vec::len),
+        Some(2),
+        "{photo}"
+    );
+    assert_eq!(
+        photo["structuredContent"],
+        json!({"mimeType": "image/png", "note": note})
+    );
+}
+
+/// The reason a fallback note gives.
+fn fallback_why(photo: &Value) -> String {
+    photo["content"][1]["text"]
+        .as_str()
+        .and_then(|n| n.strip_prefix("The GPU renderer did not make this photo ("))
+        .and_then(|n| n.strip_suffix("): it is from the built-in renderer."))
+        .unwrap_or_default()
+        .to_owned()
+}
+
+/// A photo the renderer fails on, refuses or loses is made by the built-in
+/// renderer, and the agent is told why.
+#[tokio::test]
+async fn a_photo_the_gpu_renderer_fails_on_is_made_here() {
+    let (stand_in, url) =
+        renderer_up(vec![Drawn::Running, Drawn::Failed("CUDA out of memory")]).await;
+    let Some((base, state)) = rendering_service(&url, std::time::Duration::from_secs(20)).await
+    else {
+        return;
+    };
+    let (_, access, _) = drawn_project(&base, &state, "ana@example.com").await;
+    let photo = tool(&base, &access, "render_photo", json!({"w": 96, "h": 64})).await;
+    assert_fallback(&photo, "it failed: CUDA out of memory");
+    assert_eq!(stand_in.asked().len(), 1);
+    assert_eq!(draft_renders(&state).await, 1);
+
+    *stand_in.script.lock().unwrap() = vec![Drawn::Lost].into();
+    let lost = tool(&base, &access, "render_photo", json!({"w": 96, "h": 64})).await;
+    assert_fallback(&lost, "it lost the photo");
+
+    *stand_in.refuse.lock().unwrap() =
+        Some(json!({"error": "width: a whole number from 16 to 3840", "field": "width"}));
+    let refused = tool(&base, &access, "render_photo", json!({"w": 96, "h": 64})).await;
+    assert_fallback(
+        &refused,
+        "it answered 422 Unprocessable Entity: width: a whole number from 16 to 3840",
+    );
+    assert_eq!(stand_in.asked().len(), 2, "the refused one was not taken");
+    assert_eq!(draft_renders(&state).await, 3);
+}
+
+/// A renderer that turns the token away leaves the photo here, and says so.
+#[tokio::test]
+async fn a_gpu_renderer_refusing_the_token_leaves_the_photo_here() {
+    let (stand_in, url) = renderer_up(vec![Drawn::Photo(gpu_png())]).await;
+    let Some((base, state)) =
+        rendering_service_with(&url, std::time::Duration::from_secs(20), "stale-token").await
+    else {
+        return;
+    };
+    let (_, access, _) = drawn_project(&base, &state, "ana@example.com").await;
+    let photo = tool(&base, &access, "render_photo", json!({"w": 96, "h": 64})).await;
+    assert_fallback(
+        &photo,
+        "it answered 401 Unauthorized: X-Renderer-Token is missing or wrong",
+    );
+    assert_eq!(stand_in.asked(), [] as [Value; 0]);
+}
+
+/// A renderer that cannot be reached leaves the photo to the built-in one.
+#[tokio::test]
+async fn an_unreachable_gpu_renderer_leaves_the_photo_here() {
+    let url = format!("http://{}", free_port().await);
+    let Some((base, state)) = rendering_service(&url, std::time::Duration::from_secs(20)).await
+    else {
+        return;
+    };
+    let (_, access, _) = drawn_project(&base, &state, "ana@example.com").await;
+    let photo = tool(&base, &access, "render_photo", json!({"w": 96, "h": 64})).await;
+    let why = fallback_why(&photo);
+    assert!(why.starts_with("it is unreachable: "), "{photo}");
+    assert_fallback(&photo, &why);
+}
+
+/// A renderer still at it when the wait is over leaves the photo to the
+/// built-in one.
+#[tokio::test]
+async fn a_gpu_renderer_past_the_wait_leaves_the_photo_here() {
+    let (stand_in, url) = renderer_up(vec![Drawn::Running]).await;
+    let Some((base, state)) = rendering_service(&url, std::time::Duration::from_millis(300)).await
+    else {
+        return;
+    };
+    let (_, access, _) = drawn_project(&base, &state, "ana@example.com").await;
+    let photo = tool(&base, &access, "render_photo", json!({"w": 96, "h": 64})).await;
+    assert_fallback(&photo, "it had not finished after 0.3 s");
+    assert_eq!(stand_in.asked().len(), 1);
+    assert_eq!(draft_renders(&state).await, 1);
+}
+
+/// `max_s` bounds the whole call: the GPU wait and the built-in photo after
+/// it together. Spent on the GPU, the photo is refused as the tool refuses
+/// one past its `max_s`, with no note about a photo there is not.
+#[tokio::test]
+async fn max_s_bounds_the_gpu_wait_and_the_fallback_together() {
+    let (_stand_in, url) = renderer_up(vec![Drawn::Running]).await;
+    let Some((base, state)) = rendering_service(&url, std::time::Duration::from_millis(1500)).await
+    else {
+        return;
+    };
+    let (_, access, _) = drawn_project(&base, &state, "ana@example.com").await;
+    let started = std::time::Instant::now();
+    let late = tool(
+        &base,
+        &access,
+        "render_photo",
+        json!({"w": 96, "h": 64, "max_s": 1}),
+    )
+    .await;
+    let took = started.elapsed();
+    assert!(
+        took < std::time::Duration::from_millis(1400),
+        "the GPU wait ends at max_s: {took:?}"
+    );
+    assert_eq!(
+        late,
+        json!({"content": [{"type": "text", "text": "stopped after max_s=1 s; nothing in the project changed (estimate=true says what it takes; draft, fewer pixels or threads cost less)"}], "isError": true})
+    );
+    assert_eq!(draft_renders(&state).await, 0, "no photo, nothing counted");
 }
