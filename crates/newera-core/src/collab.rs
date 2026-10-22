@@ -296,6 +296,7 @@ impl Agents {
 
 /// Milliseconds since the Unix epoch. `web_time` is std's clock natively and
 /// the page's `Date` in a browser tab, where std's clock aborts the editor.
+#[cfg(feature = "clock")]
 pub fn now_ms() -> u64 {
     web_time::SystemTime::now()
         .duration_since(web_time::UNIX_EPOCH)
@@ -307,6 +308,7 @@ mod tests {
     use super::*;
     use crate::WallId;
 
+    #[cfg(feature = "clock")]
     #[test]
     fn now_ms_is_a_current_unix_time_that_does_not_go_back() {
         let first = now_ms();

@@ -179,6 +179,8 @@ jobs:
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: cargo build -p newera-web --release --target wasm32-unknown-unknown --locked
+      # The viewer is a raw module loaded with no imports: it must have none.
+      - run: node scripts/wasm-no-imports.mjs target/wasm32-unknown-unknown/release/newera_web.wasm
       # .clippy-wasm bans the std calls that panic in the tab: Instant::now,
       # SystemTime::now/elapsed, thread::spawn/sleep/scope, process::id and
       # env::temp_dir. Native runs cannot use it: web_time's clocks are std's

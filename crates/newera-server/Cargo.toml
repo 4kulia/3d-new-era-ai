@@ -12,7 +12,7 @@ authors.workspace = true
 axum.workspace = true
 futures-util.workspace = true
 image.workspace = true
-newera-core.workspace = true
+newera-core = { workspace = true, features = ["clock"] }
 newera-draw.workspace = true
 newera-mcp.workspace = true
 newera-plugins.workspace = true

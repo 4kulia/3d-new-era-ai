@@ -15,8 +15,14 @@ schemars.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
-web-time.workspace = true
+# Only for `collab::now_ms`; the raw wasm viewer (newera-web) leaves it off, since
+# web-time imports wasm-bindgen symbols that its loader does not provide.
+web-time = { workspace = true, optional = true }
 zip.workspace = true
+
+[features]
+# `collab::now_ms`: the wall clock that also works in a browser tab.
+clock = ["dep:web-time"]
 
 [lints]
 workspace = true

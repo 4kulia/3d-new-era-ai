@@ -12,7 +12,7 @@ authors.workspace = true
 base64.workspace = true
 image.workspace = true
 newera-catalog.workspace = true
-newera-core.workspace = true
+newera-core = { workspace = true, features = ["clock"] }
 newera-sh3d.workspace = true
 newera-draw.workspace = true
 newera-joinery.workspace = true
